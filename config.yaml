@@ -1,0 +1,25 @@
+# Wiki Query — Hybrid GraphRAG for personal knowledge bases
+
+# Ollama LLM configuration
+llm:
+  model: gemma4:e4b
+  host: http://localhost:11434
+  temperature: 0.3
+  num_predict: 8192
+  num_ctx: 65536
+  timeout: 180
+
+# Sentence embedding configuration
+embeddings:
+  model: all-MiniLM-L6-v2
+  threshold: 0.5
+
+# Path to your knowledge wiki root directory.
+# Can also be set via WIKI_ROOT environment variable.
+# Priority: env WIKI_ROOT > config wiki_root > ~/knowledge
+wiki_root: "~/kDrive/4 Archiv/knowledge"
+
+# Ingest configuration (for auto_ingest.py)
+ingest:
+  feeds_config: config/feeds.yaml
+  relevance_model: gemma4:e4b
