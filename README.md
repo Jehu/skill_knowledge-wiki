@@ -97,8 +97,12 @@ python3 scripts/ingest_source.py --url "https://example.com/article" --category 
 python3 scripts/ingest_source.py --file "/path/to/article.md"
 
 # RSS / playlist auto-ingest
+# Note: Rename config/feeds.example.yaml → config/feeds.yaml first
 python3 scripts/auto_ingest.py --config config/feeds.yaml
 ```
+
+> **Setup:** `auto_ingest.py` expects `config/feeds.yaml`. A template exists at
+> `config/feeds.example.yaml` — copy or rename it and fill in your sources.
 
 Ingest extracts entities and concepts, injects wikilinks (Markdown links —
 [`target](relative/path.md) format), auto-categorises, and triggers a
@@ -341,6 +345,7 @@ python3 scripts/wiki_query.py --question "Hello world"
 | Broken citation links in synthesis | Post-processing order: bare-filename → path → link conversion |
 | Ollama timeout / truncation | Increase `num_ctx` or `timeout` in `config.yaml` |
 | Synthesis overwrites same-day query | Same question on same day → same filename. Use different phrasings |
+| `config/feeds.yaml` not found | Copy/rename `config/feeds.example.yaml` → `config/feeds.yaml` and configure your sources |
 
 ## License
 
