@@ -95,6 +95,10 @@ python3 scripts/auto_ingest.py --config config/feeds.yaml
 
 Details: `references/wiki-ingest-email-debug.md`, `references/youtube-transcript-ingest.md`, `references/email-source-config.md`
 
+Ingest supports **relevance filtering** via `--relevance`. It reads
+`wiki/config/relevance-profile.md` from the wiki root. A template is at
+[`wiki_demo/wiki/config/relevance-profile.md`](../wiki_demo/wiki/config/relevance-profile.md).
+
 Email sources (`feeds.yaml` → `email_sources:`) support `subject_exclude` patterns
 since May 2026. See `references/email-source-config.md` for full schema.
 

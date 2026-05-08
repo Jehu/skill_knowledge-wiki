@@ -104,6 +104,16 @@ python3 scripts/auto_ingest.py --config config/feeds.yaml
 > **Setup:** `auto_ingest.py` expects `config/feeds.yaml`. A template exists at
 > `config/feeds.example.yaml` — copy or rename it and fill in your sources.
 
+**Relevance filtering** — pass `--relevance` to auto-reject articles that
+don't match your interests:
+
+```bash
+python3 scripts/auto_ingest.py --config config/feeds.yaml --relevance
+```
+
+The filter reads `wiki/config/relevance-profile.md` from your wiki root.
+A template with all available options is at [`wiki_demo/wiki/config/relevance-profile.md`](wiki_demo/wiki/config/relevance-profile.md).
+
 Ingest extracts entities and concepts, injects wikilinks (Markdown links —
 [`target](relative/path.md) format), auto-categorises, and triggers a
 graph rebuild.
@@ -334,6 +344,12 @@ pip install -r requirements.txt
 python3 scripts/wiki_graph_builder.py --force
 python3 scripts/wiki_query.py --question "Hello world"
 ```
+
+## Reference: demo wiki structure
+
+A minimal example wiki structure lives at [`wiki_demo/`](wiki_demo/). It shows
+the expected file layout and includes a templated [`relevance-profile.md`](wiki_demo/wiki/config/relevance-profile.md)
+for the relevance filtering feature.
 
 ## Known issues & pitfalls
 
