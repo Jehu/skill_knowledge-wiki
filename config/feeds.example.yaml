@@ -6,7 +6,7 @@ rss: []
 
  # YouTube-Playlists (optional)
 youtube_playlists:
-  # - playlist_id: "PLUxOMl11ySRxhcq5SWJXY5qK67LmqTJsB"   # <-- Dict-Format, kein Plain-String
+  # - playlist_id: "YOUR_PLAYLIST_ID_HERE"   # <-- Dict-Format, kein Plain-String
 
  # E-Mail-Quellen via Himalaya
 email_sources:
