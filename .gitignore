@@ -1,5 +1,10 @@
 __pycache__/
 *.pyc
 *.pyo
+.venv
 .env
 .DS_Store
+references/**
+feeds.yaml
+auto_ingest.log
+state.db

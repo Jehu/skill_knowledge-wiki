@@ -491,7 +491,7 @@ def save_entity(slug: str, title: str, source_ref: str, wiki_root: str, descript
     if path.exists():
         # Append source_ref if missing + reconciliation
         meta, content = parse_frontmatter(path.read_text(encoding="utf-8"))
-        refs = meta.get("source_refs", [])
+        refs = meta.get("source_refs") or []
         if source_ref not in refs:
             refs.append(source_ref)
             meta["source_refs"] = refs
@@ -556,7 +556,7 @@ def save_concept(slug: str, title: str, source_ref: str, wiki_root: str, descrip
     today = datetime.now().strftime("%Y-%m-%d")
     if path.exists():
         meta, content = parse_frontmatter(path.read_text(encoding="utf-8"))
-        refs = meta.get("source_refs", [])
+        refs = meta.get("source_refs") or []
         if source_ref not in refs:
             refs.append(source_ref)
             meta["source_refs"] = refs

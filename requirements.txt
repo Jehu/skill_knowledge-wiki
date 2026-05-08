@@ -9,3 +9,7 @@ leidenalg>=0.10
 trafilatura>=2.0
 beautifulsoup4>=4.12
 feedparser>=6.0
+
+# Added for email HTML-to-Markdown support
+markdownify>=1.0
+lxml_html_clean>=0.4

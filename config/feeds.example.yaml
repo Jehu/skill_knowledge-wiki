@@ -1,0 +1,25 @@
+# Knowledge Wiki - Feed & Source Configuration
+# auto_ingest.py loads this via --config
+
+ # RSS-Feeds (optional)
+rss: []
+
+ # YouTube-Playlists (optional)
+youtube_playlists: []
+
+ # E-Mail-Quellen via Himalaya
+email_sources:
+  - account: "owner"
+    from: "example@domain.com"
+    category: "substack-ingest"
+    author_entity: "author name"
+    subject_exclude:
+      - "Executive Briefing:"
+      - "Sponsor:"
+  - account: "owner"
+    from: "another@mail.com"
+    category: "substack-ingest"
+    author_entity: "another name"
+
+ # Webseites (optional)
+web_pages: []

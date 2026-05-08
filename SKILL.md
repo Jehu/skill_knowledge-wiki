@@ -93,7 +93,10 @@ python3 scripts/ingest_source.py --url "https://..." --category ai-agents
 python3 scripts/auto_ingest.py --config config/feeds.yaml
 ```
 
-Details: `references/wiki-ingest-email-debug.md`, `references/youtube-transcript-ingest.md`
+Details: `references/wiki-ingest-email-debug.md`, `references/youtube-transcript-ingest.md`, `references/email-source-config.md`
+
+Email sources (`feeds.yaml` → `email_sources:`) support `subject_exclude` patterns
+since May 2026. See `references/email-source-config.md` for full schema.
 
 ### Lint — Wiki health (`wiki_lint.py`, `wiki_lint_hermes.py`)
 
@@ -166,6 +169,9 @@ against the context file list automatically.
 | Ollama timeout / truncation | Adjust `num_ctx` or `timeout` in `config.yaml` |
 | Ollama puts multiple sources in one bracket | Model output quality issue — most cases caught, edge cases slip through |
 | Synthesis overwrites same-day query | Same question on same day → same filename |
+| `save_entity`/`save_concept` crash on `TypeError: NoneType not iterable` | `meta.get("source_refs", [])` returns `None` when YAML key exists with null value. **Fix:** change to `meta.get("source_refs") or []` in `save_entity()` and `save_concept()` in `ingest_source.py`. Then fix affected entity pages: `source_refs:` → `source_refs: []` |
+| Email in state.db als processed aber kein File in raw/ | Check references/wiki-ingest-email-debug.md — three known causes: markdownify failure, source_refs: null crash during entity extraction, or cron PATH issue |
+| Email-Rohdatei hat source_url: "", defekte Redirect-Links oder kein H1 im Body | Seit May 2026 gefixt: auto_ingest.py process_email_sources() bereinigt Substack-Redirects/Unsubscribe-Links via 5 Regex-Passes, injects H1-Title, und extrahiert source_url via 3-Stufen-Strategie (Substack-Artikel-URL > non-CDN-URL > email://-Fallback). Details: references/wiki-ingest-email-debug.md |
 
 For query-specific detail see the deprecated `wiki-query` v3.3.0 SKILL.md
 (kept for reference). Full portability notes: `references/portability.md`.

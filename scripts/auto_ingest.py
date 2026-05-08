@@ -5,7 +5,7 @@ Automatische RSS/Playlist-Ingestion fuer das Knowledge-Wiki.
 Laeuft als Cronjob und pollt regelmaessig neue Quellen.
 
 Verwendung:
-    python3 auto_ingest.py --config ~/.hermes/skills_custom/knowledge/wiki-ingest/config/feeds.yaml
+    python3 auto_ingest.py --config ~/.hermes/skills_custom/knowledge-wiki/config/feeds.yaml
 
 Abhaengigkeiten:
     pip install pyyaml requests
@@ -73,8 +73,8 @@ except ImportError:
     HAS_MARKDOWNIFY = False
 
 # Konstanten
-DEFAULT_STATE_DB = Path.home() / ".hermes/skills_custom/knowledge/wiki-ingest/state.db"
-DEFAULT_CONFIG = Path.home() / ".hermes/skills_custom/knowledge/wiki-ingest/config/feeds.yaml"
+DEFAULT_STATE_DB = Path.home() / ".hermes/skills_custom/knowledge-wiki/state.db"
+DEFAULT_CONFIG = Path.home() / ".hermes/skills_custom/knowledge-wiki/config/feeds.yaml"
 RATE_LIMIT_SECONDS = 2.0
 INGEST_TIMEOUT = 300
 YT_DLP_TIMEOUT = 120
@@ -875,6 +875,21 @@ def process_email_sources(config: Dict[str, Any], db_path: Path, stats: Dict[str
                 stats["skipped"] += 1
                 continue
 
+            # Subject-Filter: überspringe Mails deren Betreff bestimmte Patterns enthält
+            subject_exclude = src.get("subject_exclude", [])
+            if subject_exclude:
+                skip = False
+                for pattern in subject_exclude:
+                    if pattern.lower() in subject.lower():
+                        logging.info("  Subject-Filter '%s' matched -> übersprungen: %s", pattern, subject)
+                        stats["skipped"] += 1
+                        skip = True
+                        break
+                if skip:
+                    # Trotzdem als processed markieren, damit sie nicht wieder auftaucht
+                    mark_processed(db_path, email_url, subject, "email_filtered")
+                    continue
+
             # Body lesen (Himalaya v1.2+: -t Flag entfernt, liest direkt)
             try:
                 body_res = subprocess.run(
@@ -985,15 +1000,59 @@ def process_email_sources(config: Dict[str, Any], db_path: Path, stats: Dict[str
             except Exception as exc:  # pylint: disable=broad-except
                 logging.error("Fehler bei Bildverarbeitung Mail %s: %s", env_id, exc)
 
-            # Ingest via --text
-            # Versuche die Original-URL aus dem E-Mail-Body zu extrahieren (Substack etc.)
+            # --- Content cleaning: Substack noise, redirect URLs, unsubscribe, missing H1 ---
+            # Remove bare Unsubscribe lines
+            md_content = re.sub(
+                r'(?im)^\s*Unsubscribe\s+https?://\S+.*$',
+                '', md_content
+            )
+            # Remove LINK: prefixed promotional lines with redirect URLs
+            md_content = re.sub(
+                r'(?im)^\s*LINK:.*\[https?://\S+\]',
+                '', md_content
+            )
+            # Remove markdown links pointing to substack redirects — keep the link text
+            md_content = re.sub(
+                r'\[([^\]]+)\]\(https?://substack\.com/redirect/[^\)]+\)',
+                r'\1', md_content
+            )
+            # Remove bare redirect URLs on their own line
+            md_content = re.sub(
+                r'(?im)^\s*https?://substack\.com/redirect/\S+.*$',
+                '', md_content
+            )
+            # Remove subscription-pitch lines with redirect URLs
+            md_content = re.sub(
+                r'(?im)^.*substack\s+tiers.*redirect.*$',
+                '', md_content
+            )
+            # Clean up multiple consecutive blank lines
+            md_content = re.sub(r'\n{3,}', '\n\n', md_content)
+            md_content = md_content.strip()
+
+            # Ensure H1 title in body (if missing)
+            if not md_content.startswith('# '):
+                md_content = f'# {subject}\n\n{md_content}'
+
+            # --- Source URL extraction: prefer Substack article URLs over redirects ---
             web_url = ""
-            url_match = re.search(r'https?://[^\s<>"]+', md_content)
-            if url_match:
-                potential = url_match.group(0).rstrip('.,;:!?)')
-                # Nimm die erste vernünftige URL (nicht CDN-Bilder)
-                if not any(cdn in potential for cdn in ['cdn.substack.com', 'substackcdn.com', 'pbs.twimg.com']):
-                    web_url = potential
+            # Strategy 1: Substack article URL (*substack.com/p/*)
+            substack_match = re.search(
+                r'https?://[^\s<>"]*substack\.com/p/[^\s<>"]+',
+                md_content
+            )
+            if substack_match:
+                web_url = substack_match.group(0).rstrip('.,;:!?)')
+            else:
+                # Strategy 2: first non-CDN URL
+                url_match = re.search(r'https?://[^\s<>"]+', md_content)
+                if url_match:
+                    potential = url_match.group(0).rstrip('.,;:!?)')
+                    if not any(cdn in potential for cdn in ['cdn.substack.com', 'substackcdn.com', 'pbs.twimg.com']):
+                        web_url = potential
+            # Strategy 3: fallback to email:// URI so source_url is never empty
+            if not web_url:
+                web_url = email_url
 
             ingest_script = get_ingest_script_path()
             try:
