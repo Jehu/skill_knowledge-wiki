@@ -17,11 +17,27 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
+import yaml
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-DEFAULT_WIKI_ROOT = os.environ.get("WIKI_ROOT", str(Path.home() / "knowledge"))
 SCRIPTS_DIR = Path(__file__).resolve().parent
+SKILL_DIR = SCRIPTS_DIR.parent
+CONFIG_PATH = SKILL_DIR / "config.yaml"
+
+CONFIG_WIKI_ROOT = None
+if CONFIG_PATH.exists():
+    try:
+        with open(CONFIG_PATH) as f:
+            _cfg = yaml.safe_load(f)
+        CONFIG_WIKI_ROOT = _cfg.get("wiki_root", None)
+        if CONFIG_WIKI_ROOT:
+            CONFIG_WIKI_ROOT = str(Path(CONFIG_WIKI_ROOT).expanduser())
+    except Exception as exc:
+        logging.warning("Could not load config.yaml: %s", exc)
+
+DEFAULT_WIKI_ROOT = os.environ.get("WIKI_ROOT") or CONFIG_WIKI_ROOT or str(Path.home() / "knowledge")
 
 # ---------------------------------------------------------------------------
 # Logging

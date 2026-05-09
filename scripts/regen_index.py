@@ -19,7 +19,36 @@ from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
 
-WIKI_ROOT = Path(os.environ.get("WIKI_ROOT", str(Path.home() / "knowledge")))
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+# ---------------------------------------------------------------------------
+# Resolve wiki root: CLI arg > env > config.yaml > ~/knowledge
+# ---------------------------------------------------------------------------
+_script_dir = Path(__file__).resolve().parent
+_skill_dir = _script_dir.parent
+_config_path = _skill_dir / "config.yaml"
+
+_config_wiki_root = None
+if yaml and _config_path.exists():
+    try:
+        with open(_config_path) as f:
+            _cfg = yaml.safe_load(f)
+        _config_wiki_root = _cfg.get("wiki_root", None)
+        if _config_wiki_root:
+            _config_wiki_root = str(Path(_config_wiki_root).expanduser())
+    except Exception:
+        pass
+
+# CLI arg (if any) overrides everything
+if len(sys.argv) > 1:
+    _root_arg = sys.argv[1]
+else:
+    _root_arg = None
+
+WIKI_ROOT = Path(_root_arg or os.environ.get("WIKI_ROOT") or _config_wiki_root or str(Path.home() / "knowledge"))
 ENTITY_DIR = WIKI_ROOT / "wiki" / "entities"
 CONCEPT_DIR = WIKI_ROOT / "wiki" / "concepts"
 RAW_DIR = WIKI_ROOT / "raw"
