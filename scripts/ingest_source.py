@@ -30,6 +30,14 @@ except ImportError:
     _append_wiki_log = None
 
 # ---------------------------------------------------------------------------
+# Import YouTube transcript helper (co-located script)
+# ---------------------------------------------------------------------------
+try:
+    from auto_ingest import _fetch_youtube_transcript
+except ImportError:
+    _fetch_youtube_transcript = None
+
+# ---------------------------------------------------------------------------
 # Import shared utilities from wiki_core
 # ---------------------------------------------------------------------------
 from wiki_core import (
@@ -93,8 +101,32 @@ def auto_categorize(title: str, content: str) -> str:
 
 
 
-def fetch_url(url: str) -> Tuple[str, str]:
-    """Fetch HTML from URL and convert to Markdown. Returns (title, markdown)."""
+def extract_embed_videos(html: str) -> list[str]:
+    """Extrahiert eingebettete Video-URLs (YouTube, Vimeo, etc.) aus HTML."""
+    urls = []
+    # YouTube: <iframe src="https://www.youtube.com/embed/VIDEO_ID"...>
+    for m in re.finditer(
+        r'<iframe[^>]+src=["\'](https?://(?:www\.)?(?:youtube\.com/embed/|youtube-nocookie\.com/embed/|player\.vimeo\.com/video/)[^"\']+)["\']',
+        html, re.IGNORECASE
+    ):
+        src = m.group(1)
+        # Normalisiere YouTube-Embed-URLs zu watch-URLs
+        if "youtube.com/embed/" in src or "youtube-nocookie.com/embed/" in src:
+            vid = src.rsplit("/", 1)[-1].split("?")[0]
+            urls.append(f"https://www.youtube.com/watch?v={vid}")
+        else:
+            urls.append(src)
+    # Twitter/X-Video-Cards (twittern oder Substack-Embeds)
+    for m in re.finditer(
+        r'(?:https?://(?:www\.)?(?:twitter|x)\.com/\w+/status/\d+)',
+        html
+    ):
+        urls.append(m.group(0))
+    return list(dict.fromkeys(urls))  # deduplizieren, Reihenfolge erhalten
+
+
+def fetch_url(url: str) -> Tuple[str, str, list[str]]:
+    """Fetch HTML from URL and convert to Markdown. Returns (title, markdown, embed_video_urls)."""
     try:
         import requests
     except ImportError as exc:
@@ -139,6 +171,9 @@ def fetch_url(url: str) -> Tuple[str, str]:
     # Extract <title>
     title_match = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
     title = title_match.group(1).strip() if title_match else "Untitled"
+
+    # Extrahiere eingebettete Videos VOR dem iframe-Wegwerfen
+    embeds = extract_embed_videos(html)
 
     # --- HTML-Chrome-Bereinigung vor markdownify ---
     soup = BeautifulSoup(html, "html.parser")
@@ -230,7 +265,7 @@ def fetch_url(url: str) -> Tuple[str, str]:
             markdown = markdown[:m.start()].rstrip()
             break
 
-    return title, markdown
+    return title, markdown, embeds
 
 
 def _naive_html_to_text(html: str) -> str:
@@ -838,6 +873,8 @@ def main():
     )
     parser.add_argument("--images-dir", default=None, help="Path to directory with images to copy next to the source file")
     parser.add_argument("--author-entity", default=None, help="Wiki entity slug to always update with this source_ref")
+    parser.add_argument("--transcribe-embeds", action="store_true",
+                        help="Transcribe embedded YouTube/Vimeo videos found in the URL content")
     parser.add_argument("--rebuild-source-links", action="store_true",
                         help="Rebuild ## Quellen sections for ALL entities and concepts (batch mode)")
     args = parser.parse_args()
@@ -890,8 +927,20 @@ def main():
         content = args.text
         source_url = args.url
     elif args.url:
-        title, content = fetch_url(args.url)
+        title, content, embeds = fetch_url(args.url)
         source_url = args.url
+        if args.transcribe_embeds and embeds:
+            if _fetch_youtube_transcript is None:
+                logging.warning("--transcribe-embeds: _fetch_youtube_transcript nicht verfügbar (auto_ingest.py?)")
+            else:
+                for vid_url in embeds:
+                    logging.info("Transkribiere eingebettetes Video: %s", vid_url)
+                    transcript = _fetch_youtube_transcript(vid_url)
+                    if transcript:
+                        content += f"\n\n## Transkript: Eingebettetes Video\n\n{transcript}\n"
+                        logging.info("Transkript angehängt (%d Zeichen)", len(transcript))
+                    else:
+                        logging.warning("Kein Transkript verfügbar für: %s", vid_url)
     elif args.file:
         title, content = read_file(args.file)
         source_url = ""

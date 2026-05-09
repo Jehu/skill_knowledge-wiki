@@ -39,6 +39,8 @@ No frames, no vision, no cost.
 | "Analyze this video and save it with frames and screenshots" | `video-to-wiki` |
 | "Put this video in my wiki" (no analysis/frames keywords) | `knowledge-wiki` ✅ |
 | "Watch and summarize" + "save to wiki" | `video-to-wiki` |
+| "Ingest this article + embedded video transcript" | `knowledge-wiki` mit `--transcribe-embeds` ✅ |
+| "Ingest inklusive video {url}" (Artikel + Embed) | `knowledge-wiki` ✅ (nur Transkript-Text, kein Frame-Zeug) |
 
 If the user explicitly asks for frame-level analysis, a structured report,
 or visual insights, use `video-to-wiki` instead. When in doubt, prefer
@@ -64,6 +66,17 @@ python3 scripts/wiki_graph_builder.py --force
 # 5. Ask a question
 python3 scripts/wiki_query.py --question "Your question"
 ```
+
+## Config resolution (all scripts)
+
+Every script resolves `wiki_root` with the same five-level priority chain:
+
+```
+CLI --wiki-root arg  >  WIKI_ROOT env var  >  config.yaml  >  ~/knowledge
+```
+
+See [`references/config-resolution.md`](references/config-resolution.md) for
+the standard implementation block and split-brain troubleshooting.
 
 ## Subsystems
 
@@ -98,6 +111,16 @@ Details: `references/wiki-ingest-email-debug.md`, `references/youtube-transcript
 Ingest supports **relevance filtering** via `--relevance`. It reads
 `wiki/config/relevance-profile.md` from the wiki root. A template is at
 [`wiki_demo/wiki/config/relevance-profile.md`](../wiki_demo/wiki/config/relevance-profile.md).
+
+**Embedded video transcription** via `--transcribe-embeds`:
+Extracts YouTube/Vimeo iframes from the scraped HTML **before** they are
+stripped, transcribes each via yt-dlp / youtube-transcript-api, and appends
+the transcript as a `## Transkript: Eingebettetes Video` section to the source:
+
+```bash
+# Artikel mit eingebettetem YouTube-Video transkribieren
+python3 scripts/ingest_source.py --url "https://example.com/blog" --transcribe-embeds
+```
 
 Email sources (`feeds.yaml` → `email_sources:`) support `subject_exclude` patterns
 since May 2026. See `references/email-source-config.md` for full schema.
@@ -174,13 +197,14 @@ against the context file list automatically.
 | Ollama puts multiple sources in one bracket | Model output quality issue — most cases caught, edge cases slip through |
 | Synthesis overwrites same-day query | Same question on same day → same filename |
 | `save_entity`/`save_concept` crash on `TypeError: NoneType not iterable` | `meta.get("source_refs", [])` returns `None` when YAML key exists with null value. **Fix:** change to `meta.get("source_refs") or []` in `save_entity()` and `save_concept()` in `ingest_source.py`. Then fix affected entity pages: `source_refs:` → `source_refs: []` |
-| `youtube_playlists` in feeds.yaml als Plain-String statt Dict | Code erwartet `- playlist_id: "PLU..."` — **nicht** `- "https://..."` |\n| Email in state.db als processed aber kein File in raw/ | Check references/wiki-ingest-email-debug.md — three known causes: markdownify failure, source_refs: null crash during entity extraction, or cron PATH issue |
+| `youtube_playlists` in feeds.yaml als Plain-String statt Dict | Code erwartet `- playlist_id: "PLU..."` — **nicht** `- "https://..."` |\\n| Email in state.db als processed aber kein File in raw/ | Check references/wiki-ingest-email-debug.md — three known causes: markdownify failure, source_refs: null crash during entity extraction, or cron PATH issue |
 | `youtube_playlists` in `feeds.yaml`: `AttributeError: str object has no attribute get` | Format must be list of dicts with `playlist_id`, not plain URL strings. Wrong: `- https://youtube.com/...&list=ID`. Right: `- playlist_id: "ID"` |
 | wiki_root with `~` doesn't expand reliably | WIKI_ROOT env var with absolute path is more reliable than `~` in config.yaml. If script falls back to `~/knowledge` despite config having `wiki_root: "~/path"`, set WIKI_ROOT explicitly |
 | Email-Rohdatei hat leere source_url, defekte Redirect-Links oder kein H1 im Body | Seit May 2026 gefixt: auto_ingest.py process_email_sources() bereinigt Substack-Redirects/Unsubscribe-Links via 5 Regex-Passes, injects H1-Title, und extrahiert source_url via 3-Stufen-Strategie (Substack-Artikel-URL > non-CDN-URL > email://-Fallback). Details: references/wiki-ingest-email-debug.md |
 | Substack comment URLs (/note/c-...) -> Errno 63: File name too long | Slug from full comment text exceeds macOS filename limit. Workaround: 1) web_extract URL -> content, 2) write manual file with short slug to raw/{cat}/, 3) ingest_source.py --file <path> --url <url> --category <cat> for entity extraction + index rebuild. Details: references/substack-comment-slug-limit.md |
 | Graph wird nach Ingest nicht rebuilt | `ingest_source.py` Zeile 1011 suchte `wiki_graph_builder.py` im alten Pfad `../wiki-query/scripts/` (vor v4.1.0-Zusammenlegung). **Fix:** Pfad auf `Path(__file__).parent / "wiki_graph_builder.py"` ändern. Graph nachträglich mit `python3 scripts/wiki_graph_builder.py --force` bauen. |
 | Scripts ignorieren config.yaml -> Split-Brain | `ingest_source.py`, `wiki_graph_builder.py` und `regen_index.py` lasen `wiki_root` aus config.yaml **nicht**. Fallback war `~/knowledge` statt `~/kDrive/4 Archiv/knowledge`. **Fix:** config.yaml aus Skript-Verzeichnis laden, Priority: CLI-arg > env `WIKI_ROOT` > config `wiki_root` > `~/knowledge`. Mai 2026 gefixt. |
+| Graph-Builder-Subprocess ohne --force | Der post-ingest Graph-Rebuild in `ingest_source.py` rief `wiki_graph_builder.py` ohne `--force` auf → existierender Graph wurde geladen anstatt neu erstellt. **Fix:** `["--force"]` ans subprocess.run-Argument hinzugefügt, Timeout auf 60s erhöht. |
 
 For query-specific detail see the deprecated `wiki-query` v3.3.0 SKILL.md
 (kept for reference). Full portability notes: `references/portability.md`.
