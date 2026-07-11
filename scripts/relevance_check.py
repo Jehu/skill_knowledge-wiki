@@ -21,6 +21,8 @@ from typing import Dict, Optional, Tuple
 import requests
 import yaml
 
+from wiki_core import resolve_wiki_root
+
 # -------------------------------------------------------------------------
 # Ollama-Defaults (gleich wie auto_categorize.py)
 # -------------------------------------------------------------------------
@@ -28,7 +30,7 @@ DEFAULT_OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:e4b")
 
 # Standard Wiki-Root
-DEFAULT_WIKI_ROOT = Path(os.environ.get("WIKI_ROOT", str(Path.home() / "knowledge")))
+DEFAULT_WIKI_ROOT = resolve_wiki_root()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -284,7 +286,7 @@ def main():
     parser.add_argument("--json", action="store_true", help="JSON-Output")
     args = parser.parse_args()
 
-    profile = load_relevance_profile(Path(args.wiki_root))
+    profile = load_relevance_profile(resolve_wiki_root(args.wiki_root))
     result = check_relevance(
         title=args.title,
         content=args.content,

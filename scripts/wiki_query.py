@@ -9,11 +9,9 @@ Usage:
 import argparse
 import json
 import logging
-import os
 import re
 import subprocess
 import sys
-import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -25,25 +23,21 @@ import requests
 # ---------------------------------------------------------------------------
 SCRIPTS_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPTS_DIR.parent
+sys.path.insert(0, str(SCRIPTS_DIR))
 
 # ---------------------------------------------------------------------------
 # Config (from config.yaml in skill directory)
 # ---------------------------------------------------------------------------
 CONFIG_PATH = SKILL_DIR / "config.yaml"
 
-if CONFIG_PATH.exists():
-    with open(CONFIG_PATH) as f:
-        CFG = yaml.safe_load(f)
-    logging.info("Loaded config from %s", CONFIG_PATH)
-else:
+try:
+    import yaml
+    CFG = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {}
+except Exception:
     CFG = {}
 
-LLM_CFG = CFG.get("llm", {})
-EMB_CFG = CFG.get("embeddings", {})
-CONFIG_WIKI_ROOT = CFG.get("wiki_root", None)
-if CONFIG_WIKI_ROOT:
-    CONFIG_WIKI_ROOT = str(Path(CONFIG_WIKI_ROOT).expanduser())
-DEFAULT_WIKI_ROOT = os.environ.get("WIKI_ROOT") or CONFIG_WIKI_ROOT or str(Path.home() / "knowledge")
+LLM_CFG = (CFG or {}).get("llm", {})
+EMB_CFG = (CFG or {}).get("embeddings", {})
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -57,7 +51,6 @@ logging.basicConfig(
 # ---------------------------------------------------------------------------
 # Import helpers from wiki_core (shared module)
 # ---------------------------------------------------------------------------
-sys.path.insert(0, str(SCRIPTS_DIR))
 try:
     from wiki_core import (
         load_wiki_index,
@@ -66,10 +59,13 @@ try:
         UMLAUT_MAP as INGEST_UMLAUT_MAP,
         dump_frontmatter,
         parse_frontmatter,
+        resolve_wiki_root,
     )
 except ImportError as exc:
     logging.error("Konnte wiki_core.py nicht importieren: %s", exc)
     sys.exit(1)
+
+DEFAULT_WIKI_ROOT = resolve_wiki_root()
 
 
 # ---------------------------------------------------------------------------
@@ -742,11 +738,11 @@ def regen_index(wiki_root: str):
 def main():
     parser = argparse.ArgumentParser(description="Graph-based Wiki Query")
     parser.add_argument("--question", required=True, help="Die zu beantwortende Frage")
-    parser.add_argument("--wiki-root", default=os.environ.get("WIKI_ROOT", DEFAULT_WIKI_ROOT))
+    parser.add_argument("--wiki-root", default=DEFAULT_WIKI_ROOT)
     parser.add_argument("--max-context-tokens", type=int, default=50000, help="Max tokens for context")
     args = parser.parse_args()
     
-    wiki_root = Path(args.wiki_root).expanduser().resolve()
+    wiki_root = resolve_wiki_root(args.wiki_root).resolve()
     if not wiki_root.exists():
         logging.error("Wiki root existiert nicht: %s", wiki_root)
         sys.exit(1)

@@ -14,7 +14,7 @@ import os
 import re
 import uuid
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 # ---------------------------------------------------------------------------
 # Slug generation
@@ -53,8 +53,11 @@ UMLAUT_MAP = {
 }
 
 
-def make_slug(text: str) -> str:
-    """Create a URL-friendly slug from a title (German umlaut aware)."""
+def make_slug(text: str, max_length: int = 120) -> str:
+    """Create a URL-friendly slug from a title (German umlaut aware).
+
+    Truncates to max_length chars to prevent macOS filename limit (Errno 63).
+    """
     text = text.lower()
     for char, repl in UMLAUT_MAP.items():
         text = text.replace(char, repl)
@@ -62,7 +65,88 @@ def make_slug(text: str) -> str:
     text = re.sub(r"[\s_]+", "-", text)
     text = text.strip("-")
     text = re.sub(r"-+", "-", text)
+    # Truncate at word boundary if possible, otherwise hard cutoff
+    if len(text) > max_length:
+        truncated = text[:max_length]
+        # Cut at last dash to avoid mid-word truncation
+        last_dash = truncated.rfind("-")
+        if last_dash > max_length // 2:
+            truncated = truncated[:last_dash]
+        text = truncated.strip("-")
     return text
+
+
+# ---------------------------------------------------------------------------
+# Filesystem safety helpers
+# ---------------------------------------------------------------------------
+def validate_category_segment(category: str) -> str:
+    """Validate a category as one literal folder-name segment.
+
+    The ingest pipeline stores sources below raw/<category>/... and therefore
+    rejects paths rather than normalizing ambiguous input.
+    """
+    if not isinstance(category, str):
+        raise ValueError("category must be a string")
+    if not category or category != category.strip():
+        raise ValueError("category must be one non-empty folder segment")
+    if category in {".", ".."}:
+        raise ValueError("category must not be '.' or '..'")
+    if "/" in category or "\\" in category:
+        raise ValueError("category must not contain path separators")
+    if Path(category).is_absolute() or PurePosixPath(category).is_absolute():
+        raise ValueError("category must not be an absolute path")
+    return category
+
+
+def resolve_raw_descendant(wiki_root: Union[str, Path], *parts: Union[str, Path]) -> Path:
+    """Resolve a path under wiki_root/raw and reject traversal or symlink escape."""
+    raw_root = (Path(wiki_root).expanduser() / "raw").resolve()
+    destination = (raw_root.joinpath(*parts)).resolve()
+    try:
+        destination.relative_to(raw_root)
+    except ValueError as exc:
+        raise ValueError(f"path escapes raw root: {destination}") from exc
+    return destination
+
+
+def _read_config_wiki_root(config_path: Path) -> Optional[str]:
+    if not config_path.exists():
+        return None
+    try:
+        import yaml  # type: ignore
+
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        value = data.get("wiki_root")
+        return str(value) if value else None
+    except Exception:
+        pass
+
+    for line in config_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("wiki_root:"):
+            value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            return value or None
+    return None
+
+
+def resolve_wiki_root(
+    cli_value: Optional[Union[str, Path]] = None,
+    *,
+    env: Optional[Dict[str, str]] = None,
+    config_path: Optional[Union[str, Path]] = None,
+) -> Path:
+    """Resolve wiki root as CLI > WIKI_ROOT env > config.yaml > ~/knowledge."""
+    env_map = os.environ if env is None else env
+    if cli_value:
+        return Path(cli_value).expanduser()
+    env_value = env_map.get("WIKI_ROOT")
+    if env_value:
+        return Path(env_value).expanduser()
+    config_file = Path(config_path) if config_path else Path(__file__).resolve().parent.parent / "config.yaml"
+    config_value = _read_config_wiki_root(config_file)
+    if config_value:
+        return Path(config_value).expanduser()
+    return Path.home() / "knowledge"
 
 
 # ---------------------------------------------------------------------------

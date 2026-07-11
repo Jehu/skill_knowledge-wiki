@@ -17,7 +17,7 @@ embeddings:
 # Path to your knowledge wiki root directory.
 # Can also be set via WIKI_ROOT environment variable.
 # Priority: env WIKI_ROOT > config wiki_root > ~/knowledge
-wiki_root: "~/kDrive/4 Archiv/knowledge"
+wiki_root: "~/knowledge"
 
 # Ingest configuration (for auto_ingest.py)
 ingest:

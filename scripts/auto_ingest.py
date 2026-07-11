@@ -35,6 +35,8 @@ from urllib.parse import urlparse
 import requests
 import yaml
 
+from wiki_core import resolve_wiki_root
+
 # Relevance-Check (zweistufig)
 try:
     from relevance_check import load_relevance_profile, check_relevance as _check_relevance
@@ -44,7 +46,7 @@ except ImportError:
     HAS_RELEVANCE_CHECK = False
 
 # Standard Wiki-Root
-DEFAULT_WIKI_ROOT = Path(os.environ.get("WIKI_ROOT", str(Path.home() / "knowledge")))
+DEFAULT_WIKI_ROOT = resolve_wiki_root()
 
 # Optional: feedparser
 # pylint: disable=import-error
@@ -293,13 +295,50 @@ def _fetch_youtube_description(video_url: str, timeout: int = 15) -> str:
     return ""
 
 
-def _fetch_youtube_transcript(video_url: str, timeout: int = 30) -> str:
-    """Lädt das YouTube-Transkript (Untertitel) herunter.
-    
-    Versucht zuerst yt-dlp mit --write-auto-subs, dann youtube-transcript-api als Fallback.
+def _fetch_video_transcript(video_url: str, timeout: int = 30) -> str:
+    """Lädt das Transkript eines Videos herunter (generisch).
+
+    Strategie:
+      1. Ist die URL ein echtes Video (https?://)? → yt-dlp probieren (1800+ Sites)
+      2. substack-video://{uuid} → S3-Pattern-Suche + yt-dlp auf konstruierter URL
+      3. Poster-URL (http?://...png) → skip, kein Video-Stream
+      4. YouTube-Fallback: youtube-transcript-api
     Gibt den vollständigen Transkript-Text zurück oder leeren String wenn nicht verfügbar.
     """
-    # Versuch 1: yt-dlp mit auto-generated subtitles
+    # --- Fallback: substack-video:// UUIDs haben keinen direkten Stream ---
+    if video_url.startswith("substack-video://"):
+        vid_uuid = video_url.split("://", 1)[1]
+        logging.info("Substack-native Video-ID erkannt (kein öffentlicher Stream): %s", vid_uuid)
+        return ""
+
+    # --- Poster-URLs (png/jpg/webp) sind Bilder, keine Videos ---
+    if re.search(r'\.(png|jpg|jpeg|webp)(\?|$)', video_url, re.IGNORECASE):
+        logging.info("Poster-Bild übersprungen (kein Video-Stream): %s", video_url)
+        return ""
+
+    # --- Twitter/X-Videos: yt-dlp kann direkt den Status crawlen ---
+    if re.match(r'https?://(www\.)?(twitter|x)\.com/\w+/status/\d+', video_url):
+        return _ytdlp_transcript(video_url, timeout)
+
+    # --- YouTube (und alle anderen yt-dlp-fähigen Sites): yt-dlp zuerst ---
+    transcript = _ytdlp_transcript(video_url, timeout)
+    if transcript:
+        return transcript
+
+    # --- YouTube-spezifischer Fallback (youtube-transcript-api) ---
+    if "youtube.com" in video_url or "youtu.be" in video_url:
+        transcript = _yt_transcript_api_fallback(video_url, timeout)
+        if transcript:
+            return transcript
+        logging.warning("Kein Transkript verfügbar für: %s", video_url)
+        return ""
+
+    logging.warning("Kein Transkript verfügbar für: %s", video_url)
+    return ""
+
+
+def _ytdlp_transcript(video_url: str, timeout: int = 30) -> str:
+    """Versucht yt-dlp für einen beliebigen Video-URL-Typ (YouTube, Vimeo, Twitter, etc.)."""
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             result = subprocess.run(
@@ -307,7 +346,7 @@ def _fetch_youtube_transcript(video_url: str, timeout: int = 30) -> str:
                     "yt-dlp",
                     "--skip-download",
                     "--write-auto-subs",
-                    "--sub-langs", "en,de",
+                    "--sub-langs", "en",
                     "--sub-format", "vtt",
                     "--output", f"{tmpdir}/%(id)s",
                     video_url,
@@ -358,28 +397,45 @@ def _fetch_youtube_transcript(video_url: str, timeout: int = 30) -> str:
         pass
     except Exception as exc:
         logging.debug("yt-dlp Transkript-Fehler: %s — %s", video_url, exc)
+    return ""
 
-    # Versuch 2: youtube-transcript-api als Fallback
+
+def _yt_transcript_api_fallback(video_url: str, timeout: int = 30) -> str:
+    """Fallback: youtube-transcript-api für YouTube-URLs.
+
+    v1.x API (seit youtube-transcript-api >= 1.0): YouTubeTranscriptApi().fetch()
+    ist eine Instanzmethode. Die alte v0.x Classmethod get_transcript() existiert
+    nicht mehr und führt zu AttributeError.
+    """
     try:
-        from youtube_transcript_api import YouTubeTranscriptApi
+        from youtube_transcript_api import YouTubeTranscriptApi  # type: ignore
         video_id = _extract_video_id(video_url)
         if video_id:
-            for lang in ["de", "en"]:
+            api = YouTubeTranscriptApi()
+            for lang in ["en", "de"]:
                 try:
-                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=[lang])
-                    transcript = "\n".join([entry["text"] for entry in transcript_list])
+                    transcript_snippets = api.fetch(video_id, languages=[lang])
+                    transcript = "\n".join([s.text for s in transcript_snippets])
                     if transcript.strip():
                         logging.info("Transkript via youtube-transcript-api geladen (%s): %d Zeichen", lang, len(transcript))
                         return transcript
-                except Exception:
+                except Exception as exc:
+                    logging.warning(
+                        "youtube-transcript-api provider failed (%s) for %s: %s",
+                        lang,
+                        video_id,
+                        exc,
+                    )
                     continue
     except ImportError:
         logging.debug("youtube-transcript-api nicht installiert")
     except Exception as exc:
         logging.debug("youtube-transcript-api Fehler: %s — %s", video_url, exc)
-
-    logging.warning("Kein Transkript verfügbar für: %s", video_url)
     return ""
+
+
+# Alias für Abwärtskompatibilität
+_fetch_youtube_transcript = _fetch_video_transcript
 
 
 def _extract_video_id(url: str) -> Optional[str]:
@@ -666,28 +722,54 @@ def process_youtube(config: Dict[str, Any], db_path: Path, stats: Dict[str, int]
             continue
 
         lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        logging.info("YouTube-Playlist: %d Videos gefunden", len(lines))
+
+        parse_failures = 0
+        yt_new = 0
+        yt_skipped = 0
         for line in lines:
             parts = line.split("\t", 1)
             if len(parts) != 2:
+                parse_failures += 1
+                logging.warning("YouTube: Zeile konnte nicht geparsed werden: %s", line[:80])
                 continue
             video_id, title = parts
             video_url = f"https://www.youtube.com/watch?v={video_id}"
             if is_processed(db_path, video_url, title):
                 logging.debug("Bereits verarbeitet: %s", title)
                 stats["skipped"] += 1
+                yt_skipped += 1
                 continue
 
-            # --- Transkript holen ---
-            yt_transcript = _fetch_youtube_transcript(video_url)
-            
-            # --- Ingest mit Transkript ---
+            # --- Transkript holen (mit Retry bei Rate-Limiting) ---
+            yt_transcript = _fetch_video_transcript(video_url)
+            if not yt_transcript:
+                logging.info("YouTube: Erster Transkript-Versuch leer fuer %s, retry in 10s", title)
+                time.sleep(10)
+                yt_transcript = _fetch_video_transcript(video_url)
+
+            # --- Fallback: YouTube-Beschreibung wenn kein Transkript ---
+            # WICHTIG: YouTube-URLs dürfen nie direkt an ingest_source.py --url
+            # übergeben werden, da YouTube Bot-Detection (429) auslöst.
+            # Daher muss IMMER ein --file mitgeliefert werden.
+            if not yt_transcript:
+                logging.warning("YouTube: Kein Transkript fuer %s nach Retry, verwende Beschreibung als Fallback", title)
+                yt_transcript = _fetch_youtube_description(video_url) or f"*Kein Transkript verfügbar. Original: {video_url}*"
+
+            # --- Ingest mit Transkript (immer als --file, nie URL-fetch) ---
             success = run_ingest(video_url, category="video-analysis", transcript=yt_transcript, title_override=title)
             if success:
                 mark_processed(db_path, video_url, title, "youtube")
                 stats["new"] += 1
+                yt_new += 1
+                logging.info("YouTube: Neues Video ingestiert: %s", title)
                 time.sleep(RATE_LIMIT_SECONDS)
             else:
                 stats["errors"] += 1
+                logging.warning("YouTube: Ingest fehlgeschlagen fuer: %s (wird im naechsten Lauf erneut versucht)", title)
+
+        logging.info("YouTube-Playlist Summary: %d gefunden, %d neu, %d dupes, %d parse-fehler",
+                     len(lines), yt_new, yt_skipped, parse_failures)
 
 
 def process_web_pages(config: Dict[str, Any], db_path: Path, stats: Dict[str, int],
@@ -824,18 +906,24 @@ def process_email_sources(config: Dict[str, Any], db_path: Path, stats: Dict[str
     for src in sources:
         account = src.get("account")
         from_address = src.get("from")
+        source_folder = src.get("folder", "INBOX")
+        move_to_folder = src.get("move_to_folder")
         category = src.get("category")
         author_entity = src.get("author_entity", "")  # Optional: Wiki entity slug for the author
         if not account or not from_address:
             logging.warning("email_source ohne account/from uebersprungen")
             continue
 
-        logging.info("Verarbeite E-Mails: account=%s from=%s", account, from_address)
+        logging.info(
+            "Verarbeite E-Mails: account=%s folder=%s from=%s",
+            account, source_folder, from_address,
+        )
         try:
             result = subprocess.run(
                 [
                     "himalaya", "envelope", "list",
                     "--account", account,
+                    "--folder", source_folder,
                     "--output", "json",
                     "--page-size", "200",
                 ],
@@ -899,6 +987,8 @@ def process_email_sources(config: Dict[str, Any], db_path: Path, stats: Dict[str
                         "read",
                         "--account",
                         account,
+                        "--folder",
+                        source_folder,
                         "--no-headers",
                         env_id,
                     ],
@@ -1094,6 +1184,32 @@ def process_email_sources(config: Dict[str, Any], db_path: Path, stats: Dict[str
                     continue
                 logging.info("  ✅ Ingestiert: %s (web_url=%s)", subject, web_url)
                 mark_processed(db_path, email_url, subject, "email")
+                if move_to_folder:
+                    move_res = subprocess.run(
+                        [
+                            "himalaya",
+                            "message",
+                            "move",
+                            "--account",
+                            account,
+                            "--folder",
+                            source_folder,
+                            move_to_folder,
+                            env_id,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    if move_res.returncode != 0:
+                        logging.error(
+                            "Fehler beim Verschieben von Mail %s nach %s: %s",
+                            env_id, move_to_folder, move_res.stderr.strip(),
+                        )
+                        stats["errors"] += 1
+                    else:
+                        logging.info("  📦 Verschoben: Mail %s -> %s", env_id, move_to_folder)
                 stats["new"] += 1
                 time.sleep(RATE_LIMIT_SECONDS)
             except Exception as exc:  # pylint: disable=broad-except
@@ -1157,6 +1273,7 @@ def main() -> int:
         help="Wiki-Root-Pfad (für Relevanz-Profil)",
     )
     args = parser.parse_args()
+    args.wiki_root = resolve_wiki_root(args.wiki_root).resolve()
 
     setup_logging(args.log_file)
 
