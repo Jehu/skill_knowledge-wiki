@@ -1179,8 +1179,6 @@ def process_email_sources(config: Dict[str, Any], db_path: Path, stats: Dict[str
                         env_id, subject, ingest_result.stderr.strip(),
                     )
                     stats["errors"] += 1
-                    # Temp-Dir aufraeumen bei Fehler
-                    shutil.rmtree(images_dir, ignore_errors=True)
                     continue
                 logging.info("  ✅ Ingestiert: %s (web_url=%s)", subject, web_url)
                 mark_processed(db_path, email_url, subject, "email")
@@ -1215,6 +1213,7 @@ def process_email_sources(config: Dict[str, Any], db_path: Path, stats: Dict[str
             except Exception as exc:  # pylint: disable=broad-except
                 logging.error("Ingest Exception fuer Mail %s: %s", env_id, exc)
                 stats["errors"] += 1
+            finally:
                 shutil.rmtree(images_dir, ignore_errors=True)
 
 

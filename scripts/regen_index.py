@@ -4,7 +4,7 @@ regen_index.py
 Regeneriert alle Indexe fuer das Knowledge-Wiki.
 Wird vom Ingest-Workflow aufgerufen.
 
-Wiki-Root: /Users/marco/kDrive/4 Archiv/knowledge/
+Wiki-Root: ~/knowledge
 Ausgabe-Indexe:
   1. wiki/_index.md      — Maschinenlesbare JSON-artige Uebersicht
   2. wiki/entities/_index.md   — Entities gruppiert nach type

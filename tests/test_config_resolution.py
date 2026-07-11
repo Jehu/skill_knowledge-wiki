@@ -2,10 +2,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from wiki_core import resolve_wiki_root
+import retrofit_provenance
+from retrofit_provenance import resolve_retrofit_wiki_root
 
 
 class WikiRootResolutionTests(unittest.TestCase):
@@ -44,6 +47,37 @@ class WikiRootResolutionTests(unittest.TestCase):
         config_path = Path(__file__).resolve().parents[1] / "config.yaml"
 
         self.assertEqual(resolve_wiki_root(config_path=config_path, env={}), Path.home() / "knowledge")
+
+    def test_retrofit_provenance_uses_environment_wiki_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "wiki-root"
+            root.mkdir()
+
+            with mock.patch.dict("os.environ", {"WIKI_ROOT": str(root)}, clear=True):
+                self.assertEqual(resolve_retrofit_wiki_root(), root.resolve())
+
+    def test_retrofit_provenance_cli_value_overrides_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli_root = Path(tmp) / "from-cli"
+            env_root = Path(tmp) / "from-env"
+            cli_root.mkdir()
+            env_root.mkdir()
+
+            with mock.patch.dict("os.environ", {"WIKI_ROOT": str(env_root)}, clear=True):
+                self.assertEqual(resolve_retrofit_wiki_root(cli_root), cli_root.resolve())
+
+    def test_retrofit_provenance_main_resolves_environment_at_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "from-env"
+            root.mkdir()
+
+            with mock.patch.dict("os.environ", {"WIKI_ROOT": str(root)}, clear=True):
+                with mock.patch.object(sys, "argv", ["retrofit_provenance.py", "--dry-run"]):
+                    with mock.patch("retrofit_provenance.collect_wiki_pages", return_value=[]) as collect:
+                        with mock.patch("builtins.print"):
+                            retrofit_provenance.main()
+
+            collect.assert_called_once_with(root.resolve())
 
 
 if __name__ == "__main__":
