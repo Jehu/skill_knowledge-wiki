@@ -49,6 +49,8 @@ from wiki_core import (
     load_wiki_index,
     _collect_protection_ranges,
     inject_wikilinks,
+    resolve_raw_descendant,
+    validate_category_segment,
 )
 
 # ---------------------------------------------------------------------------
@@ -555,7 +557,7 @@ def read_file(path: str) -> Tuple[str, str]:
 def check_duplicate(wiki_root: str, category: str, slug: str) -> bool:
     """Check whether a source with this slug already exists today."""
     today = datetime.now().strftime("%Y-%m-%d")
-    target = Path(wiki_root) / "raw" / category / f"{today}-{slug}.md"
+    target = resolve_raw_descendant(wiki_root, category, f"{today}-{slug}.md")
     try:
         if target.exists():
             logging.warning("Source already exists: %s", target)
@@ -940,6 +942,10 @@ def _try_fix_broken_ref(ref: str, wiki_root_path: Path) -> Optional[str]:
 
     category = parts[1]
     filename = parts[2]
+    try:
+        category = validate_category_segment(category)
+    except ValueError:
+        return None
 
     # Extract date prefix (YYYY-MM-DD)
     date_match = re.match(r'(\d{4}-\d{2}-\d{2})-(.+)\.md$', filename)
@@ -948,7 +954,10 @@ def _try_fix_broken_ref(ref: str, wiki_root_path: Path) -> Optional[str]:
 
     date_prefix = date_match.group(1)
     original_slug = date_match.group(2)
-    cat_dir = wiki_root_path / "raw" / category
+    try:
+        cat_dir = resolve_raw_descendant(wiki_root_path, category)
+    except ValueError:
+        return None
 
     if not cat_dir.exists():
         return None
@@ -1114,7 +1123,7 @@ def _copy_source_images(
         logging.warning("--images-dir %s does not exist, skipping image copy", images_dir)
         return False
 
-    assets_dir = wiki_root / "raw" / category / "assets" / slug
+    assets_dir = resolve_raw_descendant(wiki_root, category, "assets", slug)
     assets_dir.mkdir(parents=True, exist_ok=True)
 
     for img_file in images_dir.iterdir():
@@ -1242,10 +1251,17 @@ def main():
         logging.info("Keine Kategorie angegeben, starte Auto-Kategorisierung via Ollama...")
         category = auto_categorize(title, content)
         logging.info("Auto-Kategorie: %s", category)
+    try:
+        category = validate_category_segment(category)
+    except ValueError as exc:
+        parser.error(f"invalid --category: {exc}")
     today = datetime.now().strftime("%Y-%m-%d")
     source_filename = f"{today}-{slug}.md"
     source_rel_path = f"raw/{category}/{source_filename}"
-    source_path = wiki_root / source_rel_path
+    try:
+        source_path = resolve_raw_descendant(wiki_root, category, source_filename)
+    except ValueError as exc:
+        parser.error(f"invalid --category: {exc}")
 
     # ------------------------------------------------------------------
     # 2. Deduplication
@@ -1254,7 +1270,7 @@ def main():
         logging.info("Aborting: duplicate source.")
         sys.exit(0)
 
-    (wiki_root / "raw" / category).mkdir(parents=True, exist_ok=True)
+    source_path.parent.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
     # 3. Load existing wiki index for linking
