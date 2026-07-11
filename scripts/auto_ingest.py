@@ -327,7 +327,11 @@ def _fetch_video_transcript(video_url: str, timeout: int = 30) -> str:
 
     # --- YouTube-spezifischer Fallback (youtube-transcript-api) ---
     if "youtube.com" in video_url or "youtu.be" in video_url:
-        return _yt_transcript_api_fallback(video_url, timeout)
+        transcript = _yt_transcript_api_fallback(video_url, timeout)
+        if transcript:
+            return transcript
+        logging.warning("Kein Transkript verfügbar für: %s", video_url)
+        return ""
 
     logging.warning("Kein Transkript verfügbar für: %s", video_url)
     return ""
@@ -415,7 +419,13 @@ def _yt_transcript_api_fallback(video_url: str, timeout: int = 30) -> str:
                     if transcript.strip():
                         logging.info("Transkript via youtube-transcript-api geladen (%s): %d Zeichen", lang, len(transcript))
                         return transcript
-                except Exception:
+                except Exception as exc:
+                    logging.warning(
+                        "youtube-transcript-api provider failed (%s) for %s: %s",
+                        lang,
+                        video_id,
+                        exc,
+                    )
                     continue
     except ImportError:
         logging.debug("youtube-transcript-api nicht installiert")
