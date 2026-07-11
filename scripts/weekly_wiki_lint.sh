@@ -11,28 +11,48 @@ cd "$SCRIPT_DIR"
 python3 wiki_lint.py "$WIKI_ROOT" --json > "$LOG_FILE" 2>&1
 EXIT_CODE=$?
 
-# Parse JSON for summary
-BROKEN=$(python3 -c "import json; d=json.load(open('$LOG_FILE')); print(len(d.get('broken_links',[])))" 2>/dev/null || echo "?")
-ORPHANS=$(python3 -c "import json; d=json.load(open('$LOG_FILE')); print(len(d.get('orphan_pages',[])))" 2>/dev/null || echo "?")
-STALE=$(python3 -c "import json; d=json.load(open('$LOG_FILE')); print(len(d.get('stale_pages',[])))" 2>/dev/null || echo "?")
-DUPS=$(python3 -c "import json; d=json.load(open('$LOG_FILE')); print(len(d.get('duplicate_slugs',[])))" 2>/dev/null || echo "?")
+# Parse JSON for summary. On parse failure, keep arithmetic safe and mark the
+# changelog entry instead of propagating "?" into shell math.
+read -r BROKEN ORPHANS STALE DUPS PARSE_FAILED < <(python3 - "$LOG_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+try:
+    data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    print(
+        len(data.get("broken_links", [])),
+        len(data.get("orphan_pages", [])),
+        len(data.get("stale_pages", [])),
+        len(data.get("duplicate_slugs", [])),
+        0,
+    )
+except Exception:
+    print(0, 0, 0, 0, 1)
+PY
+)
 TOTAL=$((BROKEN + ORPHANS + STALE + DUPS))
 
 # Also produce human-readable version for the log
 HUMAN=$(python3 wiki_lint.py "$WIKI_ROOT" 2>/dev/null)
 
 # Write to wiki changelog
-python3 -c "
+python3 - "$WIKI_ROOT" "$BROKEN" "$ORPHANS" "$STALE" "$DUPS" "$TOTAL" "$PARSE_FAILED" <<'PY' 2>/dev/null
+import sys
 from wiki_log import append_log
+
+wiki_root, broken, orphans, stale, dups, total, parse_failed = sys.argv[1:]
 details = [
-    'Broken links: $BROKEN',
-    'Orphan pages: $ORPHANS', 
-    'Stale pages: $STALE',
-    'Duplicate slugs: $DUPS',
-    'Total issues: $TOTAL'
+    f"Broken links: {broken}",
+    f"Orphan pages: {orphans}",
+    f"Stale pages: {stale}",
+    f"Duplicate slugs: {dups}",
+    f"Total issues: {total}",
 ]
-append_log('$WIKI_ROOT', 'lint', 'weekly cron run', details)
-" 2>/dev/null
+if parse_failed == "1":
+    details.append("JSON parse failed; counts defaulted to 0")
+append_log(wiki_root, "lint", "weekly cron run", details)
+PY
 
 # Send Telegram notification via Hermes curl-like approach
 # (This script is called by cron, so we trigger via hermes if available)

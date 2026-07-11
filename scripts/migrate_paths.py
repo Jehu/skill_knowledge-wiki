@@ -3,7 +3,7 @@
 Wiki Migration — Batch-Link-Patch nach Ordnerstruktur-Änderungen.
 
 Verwendung:
-  python3 migrate_paths.py --old-prefix research/ --new-prefix raw/ --wiki-root "~/kDrive/4 Archiv/knowledge"
+  python3 migrate_paths.py --old-prefix research/ --new-prefix raw/ --wiki-root "~/knowledge"
 
 Ablauf:
   1. Suche alle .md Dateien im Wiki

@@ -13,7 +13,6 @@ Usage:
 
 import argparse
 import json
-import os
 import shutil
 import sys
 import time
@@ -28,12 +27,13 @@ SCRIPT_DIR = Path(__file__).parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from wiki_core import resolve_wiki_root
 from wiki_lint import parse_frontmatter
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-DEFAULT_WIKI_ROOT = os.environ.get("WIKI_ROOT", str(Path.home() / "knowledge"))
+DEFAULT_WIKI_ROOT = resolve_wiki_root()
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "gemma4:e4b"
 OLLAMA_TEMPERATURE = 0.1
@@ -48,6 +48,11 @@ C_YELLOW = "\033[93m"
 C_BLUE = "\033[94m"
 C_CYAN = "\033[96m"
 C_DIM = "\033[2m"
+
+
+def resolve_retrofit_wiki_root(cli_value=None) -> Path:
+    """Resolve the runtime wiki root through the shared project resolver."""
+    return resolve_wiki_root(cli_value).resolve()
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +311,7 @@ def main():
     )
     parser.add_argument(
         "--wiki-root",
-        default=DEFAULT_WIKI_ROOT,
+        default=None,
         help=f"Wurzelverzeichnis des Knowledge-Wiki (default: {DEFAULT_WIKI_ROOT})",
     )
     parser.add_argument(
@@ -327,7 +332,7 @@ def main():
     )
     args = parser.parse_args()
 
-    wiki_root = Path(args.wiki_root)
+    wiki_root = resolve_retrofit_wiki_root(args.wiki_root)
     if not wiki_root.is_dir():
         print(f"{C_RED}FEHLER: Wiki-Root nicht gefunden: {wiki_root}{C_RESET}")
         sys.exit(1)
