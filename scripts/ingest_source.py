@@ -30,12 +30,12 @@ except ImportError:
     _append_wiki_log = None
 
 # ---------------------------------------------------------------------------
-# Import YouTube transcript helper (co-located script)
+# Import video transcript helper (co-located script) — generisch
 # ---------------------------------------------------------------------------
 try:
-    from auto_ingest import _fetch_youtube_transcript
+    from auto_ingest import _fetch_video_transcript
 except ImportError:
-    _fetch_youtube_transcript = None
+    _fetch_video_transcript = None
 
 # ---------------------------------------------------------------------------
 # Import shared utilities from wiki_core
@@ -102,7 +102,14 @@ def auto_categorize(title: str, content: str) -> str:
 
 
 def extract_embed_videos(html: str) -> list[str]:
-    """Extrahiert eingebettete Video-URLs (YouTube, Vimeo, etc.) aus HTML."""
+    """Extrahiert eingebettete Video-URLs aus HTML.
+
+    Erkennt:
+      - YouTube/Vimeo iframes
+      - Twitter/X-Video-Cards
+      - <video>-Tags (Substack-native, etc.)
+      - Andere Video-Player-iframes
+    """
     urls = []
     # YouTube: <iframe src="https://www.youtube.com/embed/VIDEO_ID"...>
     for m in re.finditer(
@@ -122,7 +129,92 @@ def extract_embed_videos(html: str) -> list[str]:
         html
     ):
         urls.append(m.group(0))
+    # <video>-Tags: extrahiere data-video-id für Substack-native Videos
+    for m in re.finditer(
+        r'<video[^>]+data-video-id=["\']([^"\']+)["\']',
+        html
+    ):
+        vid_id = m.group(1)
+        urls.append(f"substack-video://{vid_id}")
+    # <video poster="..."> — extrahiere das Poster-Bild als Hinweis auf die Quelle
+    for m in re.finditer(
+        r'<video[^>]+poster=["\'](https?://[^"\']+)["\']',
+        html
+    ):
+        poster_url = m.group(1)
+        urls.append(poster_url)
     return list(dict.fromkeys(urls))  # deduplizieren, Reihenfolge erhalten
+
+
+def _extract_plain_text(html: str) -> str:
+    """Extract readable plain text from HTML for title heuristics."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        # Remove chrome elements
+        for tag_name in ("script", "style", "nav", "header", "footer", "aside", "noscript", "iframe"):
+            for tag in soup.find_all(tag_name):
+                tag.decompose()
+        return soup.get_text(separator="\n", strip=True)
+    except ImportError:
+        # Fallback: basic regex-based text extraction
+        text = re.sub(r"<[^>]+>", " ", html)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+
+def _derive_substack_note_title(content_text: str, fallback: str, url: str) -> str:
+    """Derive a meaningful title from a Substack Note's content text.
+
+    Substack Notes have no H1/article title — document.title is the author's
+    profile name. This extracts the first substantial sentence/line from the
+    actual note content instead.
+    """
+    if "/note/" not in url or not content_text or not content_text.strip():
+        return fallback
+
+    # Remove trailing emoji/special chars from a potential title
+    _trailing_garbage = re.compile(r"[\U0001F000-\U0010FFFF\u2000-\u2FFF\uFE00-\uFE0F\u2600-\u27BF\u2300-\u23FF\u2500-\u257F\u2580-\u259F]+\s*$")
+
+    lines = [l.strip() for l in content_text.split("\n") if l.strip()]
+    skip_prefixes = {
+        "subscribe", "comments", "reply", "like", "share",
+        "more from", "recommended", "you might like",
+        "comment", "notes", "home",
+    }
+    # Author-name regex: 1-4 words (no sentence punctuation), possibly with
+    # leading emoji or badge chars. E.g. "Ruben Dominguez", "John D. Doe",
+    # "🌟 Jane Smith"
+    _author_re = re.compile(
+        r"^[\U0001F000-\U0010FFFF]?\s*"
+        r"(?:[A-ZÄÖÜ][a-zäöüß]+\s?){1,3}"
+        r"(?:[A-Z]\.)?\s*"
+        r"(?:@[a-zA-Z0-9_]+)?$"
+    )
+
+    for line in lines:
+        if len(line) < 20:
+            continue
+        lower = line.lower()
+        if any(lower.startswith(p) for p in skip_prefixes):
+            continue
+        # Skip lines that look like author names (e.g. "Ruben Dominguez",
+        # "Ruben Dominguez (@rubendominguez)")
+        if _author_re.match(line.strip("@() ")):
+            continue
+        # Take first sentence if short enough, otherwise truncate
+        cleaned = line.strip(" .,;:!?")
+        # Strip trailing emoji/special chars
+        cleaned = _trailing_garbage.sub("", cleaned).strip()
+        sentence = re.match(r"^(.{15,120}?[.!?])\s", cleaned)
+        if sentence:
+            return sentence.group(1).strip()
+        # No sentence boundary found in first 120 chars — just truncate
+        if len(cleaned) > 90:
+            cleaned = cleaned[:90].rstrip()
+        return cleaned
+
+    return fallback
 
 
 def fetch_url(url: str) -> Tuple[str, str, list[str]]:
@@ -171,6 +263,16 @@ def fetch_url(url: str) -> Tuple[str, str, list[str]]:
     # Extract <title>
     title_match = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
     title = title_match.group(1).strip() if title_match else "Untitled"
+
+    # Substack Notes: derive title from rendered content instead of <title>
+    # (document.title is the author's profile name, not the note text)
+    if "/note/" in url and title_match:
+        text_content = _extract_plain_text(html)
+        if text_content:
+            derived = _derive_substack_note_title(text_content, title, url)
+            if derived != title:
+                logging.info("Substack Note: derived title '%s' from content (was '%s')", derived, title)
+                title = derived
 
     # Extrahiere eingebettete Videos VOR dem iframe-Wegwerfen
     embeds = extract_embed_videos(html)
@@ -234,7 +336,13 @@ def fetch_url(url: str) -> Tuple[str, str, list[str]]:
     markdown = markdown.strip()
 
     # --- Trailing-Chrome abschneiden ---
-    # Typische Website-Chrome-Patterns: alles ab dem ersten Match abschneiden
+    markdown = _strip_chrome_fragments(markdown)
+
+    return title, markdown, embeds
+
+
+def _strip_chrome_fragments(markdown: str) -> str:
+    """Entfernt typischen Website-Chrome (Footer, Sharing-Buttons, etc.) vom Ende."""
     chrome_patterns = [
         r"(?im)^\s*Ähnliche\s+Beiträge",
         r"(?im)^\s*Ähnliche\s+Artikel",
@@ -264,8 +372,139 @@ def fetch_url(url: str) -> Tuple[str, str, list[str]]:
         if m:
             markdown = markdown[:m.start()].rstrip()
             break
+    return markdown
 
-    return title, markdown, embeds
+
+def _extract_content(html: str) -> str:
+    """Extrahiert lesbaren Content aus HTML, entfernt Chrome/Navigation/Werbung.
+
+    Versucht zuerst trafilatura (beste Content-Extraktion), fällt zurück auf
+    BS4+markdownify wenn nicht installiert.
+    """
+    try:
+        import trafilatura  # type: ignore
+        result = trafilatura.extract(
+            html,
+            include_links=True,
+            include_images=False,
+            include_tables=False,
+            output_format="markdown",
+            with_metadata=False,
+        )
+        if result and len(result) > 50:
+            return result
+    except ImportError:
+        pass
+    except Exception as exc:
+        logging.debug("trafilatura extraction failed, falling back: %s", exc)
+
+    # Fallback: BS4 + markdownify (wie fetch_url())
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    for tag_name in ("script", "style", "nav", "footer", "header",
+                     "aside", "form", "noscript", "iframe", "svg"):
+        for tag in soup.find_all(tag_name):
+            tag.decompose()
+    body = soup.find("body") or soup
+    body_html = str(body)
+    try:
+        from markdownify import markdownify
+        return markdownify(body_html, heading_style="ATX")
+    except ImportError:
+        return _naive_html_to_text(body_html)
+
+
+# ---------------------------------------------------------------------------
+# Browser-based URL fetch (JS-rendered — für SPAs wie Substack Notes)
+# ---------------------------------------------------------------------------
+BROWSER_SCRIPT = Path(__file__).parent / "fetch_render.js"
+PLAYWRIGHT_NODE = Path.home() / ".hermes/hermes-agent/node_modules/.bin/playwright"
+NODE_PATH_DIR = Path.home() / ".hermes/hermes-agent/node_modules"
+
+
+def _playwright_available() -> bool:
+    """Check if the Playwright browser fetch script is usable."""
+    return BROWSER_SCRIPT.exists() and PLAYWRIGHT_NODE.exists()
+
+
+def fetch_url_browser(url: str, timeout: int = 45) -> tuple[str, str, list[str]]:
+    """Fetch rendered HTML with Playwright (JS executes), then extract clean content.
+
+    Returns (title, markdown, embed_video_urls) — same signature as fetch_url().
+    Falls back to fetch_url() if Playwright isn't available.
+    """
+    if not _playwright_available():
+        logging.warning("Playwright nicht verfügbar, fallback auf requests-basierten Fetch")
+        return fetch_url(url)
+
+    logging.info("Fetch mit Browser (JS-Rendering): %s", url)
+    try:
+        result = subprocess.run(
+            ["node", str(BROWSER_SCRIPT), url, str(timeout * 1000)],
+            capture_output=True,
+            text=True,
+            timeout=timeout + 10,
+            check=False,
+            env={**os.environ, "NODE_PATH": str(NODE_PATH_DIR)},
+        )
+        if result.returncode != 0:
+            logging.error("Browser-Fetch fehlgeschlagen (exit %d): %s",
+                          result.returncode, result.stderr[:500])
+            return fetch_url(url)
+
+        import json
+        try:
+            data = json.loads(result.stdout)
+        except (json.JSONDecodeError, ValueError):
+            logging.warning("Browser-Fetch lieferte kein valides JSON, fallback auf requests")
+            return fetch_url(url)
+
+        html = data.get("html", "")
+        if not html or len(html) < 200:
+            logging.warning("Browser-Fetch lieferte leeres HTML, fallback auf requests")
+            return fetch_url(url)
+
+        title = data.get("title", "Untitled").strip()
+        # Bereinige Substack-Titel: alles nach erstem Umbruch oder "…" abschneiden
+        for sep in ["\n", "\r", "…"]:
+            if sep in title:
+                title = title.split(sep)[0].strip()
+        # Lange Titel (>80): nur den Teil vor dem ersten Doppelpunkt nehmen
+        # (Substack: "Name (@handle): \"langer Kommentar..."
+        if len(title) > 80 and ":" in title:
+            title = title.split(":")[0].strip()
+        title = title.strip('":;\\ ')
+        if not title:
+            title = "Untitled"
+
+        # Substack Notes: derive title from actual note content instead of
+        # document.title (which is the author's profile name)
+        text = data.get("text", "")
+        if "/note/" in url:
+            derived = _derive_substack_note_title(text, title, url)
+            if derived != title:
+                logging.info("Substack Note: derived title '%s' from content (was '%s')", derived, title)
+                title = derived
+        trimmed_html = data.get("trimmed_html", "")
+
+        # Extrahiere eingebettete Videos aus dem vollen HTML
+        embeds = extract_embed_videos(html)
+
+        # Content: bevorzuge trimmed_html via trafilatura, fallback auf plain text
+        if trimmed_html and len(trimmed_html) > 200:
+            markdown = _extract_content(trimmed_html)
+            # trafilatura gibt leeren string wenn nix gefunden
+            if not markdown or len(markdown) < 50:
+                markdown = text
+        else:
+            markdown = text
+
+        markdown = _strip_chrome_fragments(markdown)
+        return title, markdown, embeds
+
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logging.error("Browser-Fetch Exception: %s, fallback auf requests", exc)
+        return fetch_url(url)
 
 
 def _naive_html_to_text(html: str) -> str:
@@ -317,9 +556,15 @@ def check_duplicate(wiki_root: str, category: str, slug: str) -> bool:
     """Check whether a source with this slug already exists today."""
     today = datetime.now().strftime("%Y-%m-%d")
     target = Path(wiki_root) / "raw" / category / f"{today}-{slug}.md"
-    if target.exists():
-        logging.warning("Source already exists: %s", target)
-        return True
+    try:
+        if target.exists():
+            logging.warning("Source already exists: %s", target)
+            return True
+    except OSError as exc:
+        # z.B. Errno 63 (file name too long) auf macOS — Slug ist zu lang
+        logging.warning("check_duplicate OSError (slug zu lang?): %s — %s", target, exc)
+        # Continue — existiert nicht (konnte nicht existieren)
+        pass
     return False
 
 
@@ -386,6 +631,7 @@ def _call_ollama_extract(content: str, source_ref: str = "") -> List[Dict[str, A
         f"Artikel:\n{truncated}"
     )
 
+    import json
     try:
         resp = requests.post(
             "http://localhost:11434/api/generate",
@@ -418,7 +664,7 @@ def _call_ollama_extract(content: str, source_ref: str = "") -> List[Dict[str, A
             response_text = stripped
         response_text = response_text.strip()
 
-        import json
+        # import json moved to top of function
         result = json.loads(response_text)
 
         entities = result.get("entities", [])
@@ -874,7 +1120,9 @@ def main():
     parser.add_argument("--images-dir", default=None, help="Path to directory with images to copy next to the source file")
     parser.add_argument("--author-entity", default=None, help="Wiki entity slug to always update with this source_ref")
     parser.add_argument("--transcribe-embeds", action="store_true",
-                        help="Transcribe embedded YouTube/Vimeo videos found in the URL content")
+                        help="Transcribe embedded videos (YouTube, Vimeo, Twitter, etc.) found in the URL content")
+    parser.add_argument("--use-browser", action="store_true",
+                        help="Use Playwright (JS-rendering) instead of requests for URL fetch — needed for SPAs like Substack Notes")
     parser.add_argument("--rebuild-source-links", action="store_true",
                         help="Rebuild ## Quellen sections for ALL entities and concepts (batch mode)")
     args = parser.parse_args()
@@ -927,15 +1175,18 @@ def main():
         content = args.text
         source_url = args.url
     elif args.url:
-        title, content, embeds = fetch_url(args.url)
+        if args.use_browser:
+            title, content, embeds = fetch_url_browser(args.url)
+        else:
+            title, content, embeds = fetch_url(args.url)
         source_url = args.url
         if args.transcribe_embeds and embeds:
-            if _fetch_youtube_transcript is None:
-                logging.warning("--transcribe-embeds: _fetch_youtube_transcript nicht verfügbar (auto_ingest.py?)")
+            if _fetch_video_transcript is None:
+                logging.warning("--transcribe-embeds: _fetch_video_transcript nicht verfügbar (auto_ingest.py?)")
             else:
                 for vid_url in embeds:
                     logging.info("Transkribiere eingebettetes Video: %s", vid_url)
-                    transcript = _fetch_youtube_transcript(vid_url)
+                    transcript = _fetch_video_transcript(vid_url)
                     if transcript:
                         content += f"\n\n## Transkript: Eingebettetes Video\n\n{transcript}\n"
                         logging.info("Transkript angehängt (%d Zeichen)", len(transcript))

@@ -53,8 +53,11 @@ UMLAUT_MAP = {
 }
 
 
-def make_slug(text: str) -> str:
-    """Create a URL-friendly slug from a title (German umlaut aware)."""
+def make_slug(text: str, max_length: int = 120) -> str:
+    """Create a URL-friendly slug from a title (German umlaut aware).
+
+    Truncates to max_length chars to prevent macOS filename limit (Errno 63).
+    """
     text = text.lower()
     for char, repl in UMLAUT_MAP.items():
         text = text.replace(char, repl)
@@ -62,6 +65,14 @@ def make_slug(text: str) -> str:
     text = re.sub(r"[\s_]+", "-", text)
     text = text.strip("-")
     text = re.sub(r"-+", "-", text)
+    # Truncate at word boundary if possible, otherwise hard cutoff
+    if len(text) > max_length:
+        truncated = text[:max_length]
+        # Cut at last dash to avoid mid-word truncation
+        last_dash = truncated.rfind("-")
+        if last_dash > max_length // 2:
+            truncated = truncated[:last_dash]
+        text = truncated.strip("-")
     return text
 
 
