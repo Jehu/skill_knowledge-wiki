@@ -77,6 +77,39 @@ def make_slug(text: str, max_length: int = 120) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Filesystem safety helpers
+# ---------------------------------------------------------------------------
+def validate_category_segment(category: str) -> str:
+    """Validate a category as one literal folder-name segment.
+
+    The ingest pipeline stores sources below raw/<category>/... and therefore
+    rejects paths rather than normalizing ambiguous input.
+    """
+    if not isinstance(category, str):
+        raise ValueError("category must be a string")
+    if not category or category != category.strip():
+        raise ValueError("category must be one non-empty folder segment")
+    if category in {".", ".."}:
+        raise ValueError("category must not be '.' or '..'")
+    if "/" in category or "\\" in category:
+        raise ValueError("category must not contain path separators")
+    if Path(category).is_absolute() or PurePosixPath(category).is_absolute():
+        raise ValueError("category must not be an absolute path")
+    return category
+
+
+def resolve_raw_descendant(wiki_root: str | Path, *parts: str | Path) -> Path:
+    """Resolve a path under wiki_root/raw and reject traversal or symlink escape."""
+    raw_root = (Path(wiki_root).expanduser() / "raw").resolve()
+    destination = (raw_root.joinpath(*parts)).resolve()
+    try:
+        destination.relative_to(raw_root)
+    except ValueError as exc:
+        raise ValueError(f"path escapes raw root: {destination}") from exc
+    return destination
+
+
+# ---------------------------------------------------------------------------
 # Frontmatter helpers
 # ---------------------------------------------------------------------------
 def parse_frontmatter(text: str) -> Tuple[Dict[str, any], str]:
