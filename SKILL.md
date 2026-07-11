@@ -115,7 +115,7 @@ dependencies that only surface during real runs.
 
 ## Config resolution (all scripts)
 
-Every script resolves `wiki_root` with the same five-level priority chain:
+Every script resolves `wiki_root` with the same priority chain:
 
 ```
 CLI --wiki-root arg  >  WIKI_ROOT env var  >  config.yaml  >  ~/knowledge
@@ -123,6 +123,12 @@ CLI --wiki-root arg  >  WIKI_ROOT env var  >  config.yaml  >  ~/knowledge
 
 See [`references/config-resolution.md`](references/config-resolution.md) for
 the standard implementation block and split-brain troubleshooting.
+
+Offline regression tests for ingest safety and config resolution:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py'
+```
 
 ## Subsystems
 

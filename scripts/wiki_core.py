@@ -14,7 +14,7 @@ import os
 import re
 import uuid
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 # ---------------------------------------------------------------------------
 # Slug generation
@@ -98,7 +98,7 @@ def validate_category_segment(category: str) -> str:
     return category
 
 
-def resolve_raw_descendant(wiki_root: str | Path, *parts: str | Path) -> Path:
+def resolve_raw_descendant(wiki_root: Union[str, Path], *parts: Union[str, Path]) -> Path:
     """Resolve a path under wiki_root/raw and reject traversal or symlink escape."""
     raw_root = (Path(wiki_root).expanduser() / "raw").resolve()
     destination = (raw_root.joinpath(*parts)).resolve()
@@ -107,6 +107,46 @@ def resolve_raw_descendant(wiki_root: str | Path, *parts: str | Path) -> Path:
     except ValueError as exc:
         raise ValueError(f"path escapes raw root: {destination}") from exc
     return destination
+
+
+def _read_config_wiki_root(config_path: Path) -> Optional[str]:
+    if not config_path.exists():
+        return None
+    try:
+        import yaml  # type: ignore
+
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        value = data.get("wiki_root")
+        return str(value) if value else None
+    except Exception:
+        pass
+
+    for line in config_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("wiki_root:"):
+            value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            return value or None
+    return None
+
+
+def resolve_wiki_root(
+    cli_value: Optional[Union[str, Path]] = None,
+    *,
+    env: Optional[Dict[str, str]] = None,
+    config_path: Optional[Union[str, Path]] = None,
+) -> Path:
+    """Resolve wiki root as CLI > WIKI_ROOT env > config.yaml > ~/knowledge."""
+    env_map = os.environ if env is None else env
+    if cli_value:
+        return Path(cli_value).expanduser()
+    env_value = env_map.get("WIKI_ROOT")
+    if env_value:
+        return Path(env_value).expanduser()
+    config_file = Path(config_path) if config_path else Path(__file__).resolve().parent.parent / "config.yaml"
+    config_value = _read_config_wiki_root(config_file)
+    if config_value:
+        return Path(config_value).expanduser()
+    return Path.home() / "knowledge"
 
 
 # ---------------------------------------------------------------------------

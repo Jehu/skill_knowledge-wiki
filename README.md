@@ -68,7 +68,7 @@ embeddings:
 wiki_root: "~/knowledge"     # Path to your wiki (env WIKI_ROOT > config > default)
 ```
 
-**Priority for wiki root:** `WIKI_ROOT` env var > `config.yaml wiki_root` > `~/knowledge`
+**Priority for wiki root:** explicit `--wiki-root` CLI argument > `WIKI_ROOT` env var > `config.yaml wiki_root` > `~/knowledge`
 
 ## Usage
 
@@ -343,6 +343,14 @@ pip install -r requirements.txt
 # edit config.yaml → set wiki_root + optionally change Ollama model
 python3 scripts/wiki_graph_builder.py --force
 python3 scripts/wiki_query.py --question "Hello world"
+```
+
+### Offline regression tests
+
+Run the deterministic local suite before changing ingest or configuration code:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
 ## Reference: demo wiki structure

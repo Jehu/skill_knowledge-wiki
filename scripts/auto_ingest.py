@@ -35,6 +35,8 @@ from urllib.parse import urlparse
 import requests
 import yaml
 
+from wiki_core import resolve_wiki_root
+
 # Relevance-Check (zweistufig)
 try:
     from relevance_check import load_relevance_profile, check_relevance as _check_relevance
@@ -44,7 +46,7 @@ except ImportError:
     HAS_RELEVANCE_CHECK = False
 
 # Standard Wiki-Root
-DEFAULT_WIKI_ROOT = Path(os.environ.get("WIKI_ROOT", str(Path.home() / "knowledge")))
+DEFAULT_WIKI_ROOT = resolve_wiki_root()
 
 # Optional: feedparser
 # pylint: disable=import-error
@@ -1261,6 +1263,7 @@ def main() -> int:
         help="Wiki-Root-Pfad (für Relevanz-Profil)",
     )
     args = parser.parse_args()
+    args.wiki_root = resolve_wiki_root(args.wiki_root).resolve()
 
     setup_logging(args.log_file)
 

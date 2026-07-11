@@ -19,8 +19,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import yaml
-
 # ---------------------------------------------------------------------------
 # Import wiki_log (co-located script)
 # ---------------------------------------------------------------------------
@@ -50,28 +48,14 @@ from wiki_core import (
     _collect_protection_ranges,
     inject_wikilinks,
     resolve_raw_descendant,
+    resolve_wiki_root,
     validate_category_segment,
 )
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-SCRIPTS_DIR = Path(__file__).resolve().parent
-SKILL_DIR = SCRIPTS_DIR.parent
-CONFIG_PATH = SKILL_DIR / "config.yaml"
-
-CONFIG_WIKI_ROOT = None
-if CONFIG_PATH.exists():
-    try:
-        with open(CONFIG_PATH) as f:
-            _cfg = yaml.safe_load(f)
-        CONFIG_WIKI_ROOT = _cfg.get("wiki_root", None)
-        if CONFIG_WIKI_ROOT:
-            CONFIG_WIKI_ROOT = str(Path(CONFIG_WIKI_ROOT).expanduser())
-    except Exception as exc:
-        logging.warning("Could not load config.yaml: %s", exc)
-
-DEFAULT_WIKI_ROOT = os.environ.get("WIKI_ROOT") or CONFIG_WIKI_ROOT or str(Path.home() / "knowledge")
+DEFAULT_WIKI_ROOT = resolve_wiki_root()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1150,7 +1134,7 @@ def main():
     parser.add_argument("--category", default=None, help="Target category folder (auto-detected if omitted)")
     parser.add_argument(
         "--wiki-root",
-        default=os.environ.get("WIKI_ROOT", DEFAULT_WIKI_ROOT),
+        default=DEFAULT_WIKI_ROOT,
         help="Root path of the wiki repository",
     )
     parser.add_argument("--images-dir", default=None, help="Path to directory with images to copy next to the source file")
@@ -1163,7 +1147,7 @@ def main():
                         help="Rebuild ## Quellen sections for ALL entities and concepts (batch mode)")
     args = parser.parse_args()
 
-    wiki_root = Path(args.wiki_root).expanduser().resolve()
+    wiki_root = resolve_wiki_root(args.wiki_root).resolve()
     if not wiki_root.exists():
         logging.error("Wiki root does not exist: %s", wiki_root)
         sys.exit(1)

@@ -10,34 +10,17 @@ Usage:
 import argparse
 import json
 import logging
-import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
-import yaml
-
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 SCRIPTS_DIR = Path(__file__).resolve().parent
-SKILL_DIR = SCRIPTS_DIR.parent
-CONFIG_PATH = SKILL_DIR / "config.yaml"
-
-CONFIG_WIKI_ROOT = None
-if CONFIG_PATH.exists():
-    try:
-        with open(CONFIG_PATH) as f:
-            _cfg = yaml.safe_load(f)
-        CONFIG_WIKI_ROOT = _cfg.get("wiki_root", None)
-        if CONFIG_WIKI_ROOT:
-            CONFIG_WIKI_ROOT = str(Path(CONFIG_WIKI_ROOT).expanduser())
-    except Exception as exc:
-        logging.warning("Could not load config.yaml: %s", exc)
-
-DEFAULT_WIKI_ROOT = os.environ.get("WIKI_ROOT") or CONFIG_WIKI_ROOT or str(Path.home() / "knowledge")
+sys.path.insert(0, str(SCRIPTS_DIR))
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -51,15 +34,17 @@ logging.basicConfig(
 # ---------------------------------------------------------------------------
 # Import helpers from wiki_core (shared module)
 # ---------------------------------------------------------------------------
-sys.path.insert(0, str(SCRIPTS_DIR))
 try:
     from wiki_core import (
         load_wiki_index,
         parse_frontmatter,
+        resolve_wiki_root,
     )
 except ImportError as exc:
     logging.error("Konnte wiki_core.py nicht importieren: %s", exc)
     sys.exit(1)
+
+DEFAULT_WIKI_ROOT = resolve_wiki_root()
 
 
 # ---------------------------------------------------------------------------
@@ -460,11 +445,11 @@ def detect_communities_connected_components(G: WikiGraph) -> Dict[str, List[str]
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Build knowledge graph from Wiki")
-    parser.add_argument("--wiki-root", default=os.environ.get("WIKI_ROOT", DEFAULT_WIKI_ROOT))
+    parser.add_argument("--wiki-root", default=DEFAULT_WIKI_ROOT)
     parser.add_argument("--force", action="store_true", help="Force rebuild even if graph exists")
     args = parser.parse_args()
     
-    wiki_root = Path(args.wiki_root).expanduser().resolve()
+    wiki_root = resolve_wiki_root(args.wiki_root).resolve()
     if not wiki_root.exists():
         logging.error("Wiki root does not exist: %s", wiki_root)
         sys.exit(1)
