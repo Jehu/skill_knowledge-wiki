@@ -1102,6 +1102,33 @@ def regen_index(wiki_root: str):
         logging.error("Index regeneration failed: %s", exc)
 
 
+def _copy_source_images(
+    source_path: Path,
+    wiki_root: Path,
+    category: str,
+    slug: str,
+    images_dir: Path,
+) -> bool:
+    """Copy caller-provided image files into the source asset directory."""
+    if not images_dir.is_dir():
+        logging.warning("--images-dir %s does not exist, skipping image copy", images_dir)
+        return False
+
+    assets_dir = wiki_root / "raw" / category / "assets" / slug
+    assets_dir.mkdir(parents=True, exist_ok=True)
+
+    for img_file in images_dir.iterdir():
+        if img_file.is_file():
+            shutil.copy2(img_file, assets_dir / img_file.name)
+            logging.info("Copied image: %s -> %s", img_file.name, assets_dir / img_file.name)
+
+    saved_text = source_path.read_text(encoding="utf-8")
+    updated_text = saved_text.replace("images/", f"assets/{slug}/")
+    source_path.write_text(updated_text, encoding="utf-8")
+    logging.info("Updated image paths in %s", source_path)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
@@ -1252,28 +1279,7 @@ def main():
     # 5b. Copy images (if --images-dir was provided)
     # ------------------------------------------------------------------
     if args.images_dir:
-        images_dir = Path(args.images_dir)
-        if images_dir.is_dir():
-            assets_dir = wiki_root / "raw" / category / "assets" / slug
-            assets_dir.mkdir(parents=True, exist_ok=True)
-
-            # Copy all files from temp dir to assets
-            for img_file in images_dir.iterdir():
-                if img_file.is_file():
-                    shutil.copy2(img_file, assets_dir / img_file.name)
-                    logging.info("Copied image: %s -> %s", img_file.name, assets_dir / img_file.name)
-
-            # Update markdown: replace images/filename -> assets/slug/filename
-            saved_text = source_path.read_text(encoding="utf-8")
-            updated_text = saved_text.replace(f"images/", f"assets/{slug}/")
-            source_path.write_text(updated_text, encoding="utf-8")
-            logging.info("Updated image paths in %s", source_path)
-
-            # Clean up temp dir
-            shutil.rmtree(images_dir, ignore_errors=True)
-            logging.info("Cleaned up temp images dir: %s", images_dir)
-        else:
-            logging.warning("--images-dir %s does not exist, skipping image copy", args.images_dir)
+        _copy_source_images(source_path, wiki_root, category, slug, Path(args.images_dir))
 
     # ------------------------------------------------------------------
     # 6. Entity / Concept extraction (LLM placeholder)
