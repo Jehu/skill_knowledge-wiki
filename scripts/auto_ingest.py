@@ -36,7 +36,7 @@ import requests
 import yaml
 
 from wiki_core import resolve_wiki_root
-from youtube_transcripts import canonical_youtube_url, parse_youtube_identity
+from youtube_transcripts import canonical_youtube_url, fetch_youtube_transcript, parse_youtube_identity
 
 # Relevance-Check (zweistufig)
 try:
@@ -311,6 +311,13 @@ def _fetch_video_transcript(video_url: str, timeout: int = 30) -> str:
     if re.match(r'https?://(www\.)?(twitter|x)\.com/\w+/status/\d+', video_url):
         return _ytdlp_transcript(video_url, timeout)
 
+    if parse_youtube_identity(video_url):
+        result = fetch_youtube_transcript(video_url, timeout=timeout)
+        if result:
+            return result.to_plain_text()
+        logging.warning("Kein Transkript verfügbar für: %s", video_url)
+        return ""
+
     # --- YouTube (und alle anderen yt-dlp-fähigen Sites): yt-dlp zuerst ---
     transcript = _ytdlp_transcript(video_url, timeout)
     if transcript:
@@ -400,29 +407,24 @@ def _yt_transcript_api_fallback(video_url: str, timeout: int = 30) -> str:
     """
     try:
         from youtube_transcript_api import YouTubeTranscriptApi  # type: ignore
-        video_id = _extract_video_id(video_url)
-        if video_id:
-            api = YouTubeTranscriptApi()
-            for lang in ["en", "de"]:
-                try:
-                    transcript_snippets = api.fetch(video_id, languages=[lang])
-                    transcript = "\n".join([s.text for s in transcript_snippets])
-                    if transcript.strip():
-                        logging.info("Transkript via youtube-transcript-api geladen (%s): %d Zeichen", lang, len(transcript))
-                        return transcript
-                except Exception as exc:
-                    logging.warning(
-                        "youtube-transcript-api provider failed (%s) for %s: %s",
-                        lang,
-                        video_id,
-                        exc,
-                    )
-                    continue
+        result = fetch_youtube_transcript(
+            video_url,
+            preferred_languages=("en", "de"),
+            timeout=timeout,
+            runner=_missing_ytdlp_runner,
+            api_factory=YouTubeTranscriptApi,
+        )
+        if result:
+            return result.to_plain_text()
     except ImportError:
         logging.debug("youtube-transcript-api nicht installiert")
     except Exception as exc:
         logging.debug("youtube-transcript-api Fehler: %s — %s", video_url, exc)
     return ""
+
+
+def _missing_ytdlp_runner(*_args: Any, **_kwargs: Any) -> object:
+    raise FileNotFoundError("yt-dlp disabled for API-only fallback")
 
 
 # Alias für Abwärtskompatibilität
