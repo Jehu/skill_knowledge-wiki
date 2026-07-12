@@ -205,10 +205,13 @@ the agent knows the context was just built.
 "Import the transcript from https://youtu.be/abc123 into my knowledge base"
 ```
 
-This is the lightweight variant — the agent fetches the transcript (via yt-dlp
-or youtube-transcript-api), creates a source page in `raw/video-analysis/`, and
-extracts entities and concepts. No frames, no vision analysis, no structured
-report — just the raw transcript saved as a searchable wiki entry.
+This is the lightweight variant — the agent fetches captions via the canonical
+YouTube transcript pipeline (`yt-dlp`, then `youtube-transcript-api` fallback),
+creates a timestamped source page in `raw/video-analysis/`, and extracts entities
+and concepts. Direct YouTube URLs never fall back to fetching YouTube HTML. No
+audio transcription, frames, vision analysis, or structured video report is
+created; the wiki stores caption text with timestamp anchors for later claim
+evidence.
 
 > **About categories:** The wiki has an automatic categorisation step
 > (`auto_categorize.py`) that analyses each article and assigns it to the

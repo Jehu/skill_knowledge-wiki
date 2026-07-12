@@ -70,6 +70,49 @@ class ClaimLedgerTests(unittest.TestCase):
             self.assertEqual(locator["source_sha256"], expected)
             self.assertEqual(locator["source_path"], "raw/ai/source.md")
 
+    def test_timestamped_source_adds_media_time_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wiki_root = Path(tmp)
+            raw = wiki_root / "raw" / "video" / "source.md"
+            raw.parent.mkdir(parents=True)
+            raw.write_text("[00:10] Claim A is stable.\n[00:20] Claim B follows.", encoding="utf-8")
+
+            locator = build_evidence_locator(wiki_root, raw, "Claim A is stable.", extractor_version="test")
+
+            self.assertEqual(locator["media_time_range"], [10.0, 20.0])
+            report = validate_claim_sidecar(wiki_root, "concepts", "missing")
+            self.assertEqual(report, {"valid": [], "invalid": []})
+
+    def test_legacy_locator_without_media_time_validates_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wiki_root = Path(tmp)
+            raw = wiki_root / "raw" / "ai" / "source.md"
+            raw.parent.mkdir(parents=True)
+            raw.write_text("Legacy evidence", encoding="utf-8")
+            locator = build_evidence_locator(wiki_root, raw, "Legacy", extractor_version="test")
+            locator.pop("media_time_range", None)
+            upsert_claim(wiki_root, "concepts", "legacy", "Legacy evidence exists.", locator)
+
+            report = validate_claim_sidecar(wiki_root, "concepts", "legacy")
+
+            self.assertEqual(len(report["valid"]), 1)
+            self.assertEqual(report["invalid"], [])
+
+    def test_invalid_media_time_range_invalidates_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wiki_root = Path(tmp)
+            raw = wiki_root / "raw" / "video" / "source.md"
+            raw.parent.mkdir(parents=True)
+            raw.write_text("[00:10] Evidence", encoding="utf-8")
+            locator = build_evidence_locator(wiki_root, raw, "Evidence", extractor_version="test")
+            locator["media_time_range"] = [20.0, 10.0]
+            upsert_claim(wiki_root, "concepts", "video", "Evidence exists.", locator)
+
+            report = validate_claim_sidecar(wiki_root, "concepts", "video")
+
+            self.assertEqual(len(report["invalid"]), 1)
+            self.assertIn("invalid media_time_range", report["invalid"][0]["errors"])
+
 
 if __name__ == "__main__":
     unittest.main()
