@@ -1,6 +1,8 @@
 # Wiki Query — Hybrid GraphRAG for personal knowledge bases
 
-# Ollama LLM configuration
+# LLM configuration.
+# Defaults stay local: provider is omitted for backward compatibility and
+# resolves to Ollama.
 llm:
   model: gemma4:e4b
   host: http://localhost:11434
@@ -8,6 +10,18 @@ llm:
   num_predict: 8192
   num_ctx: 65536
   timeout: 180
+
+# Optional per-workflow overrides. Remote providers are opt-in per profile.
+# A provider-changing profile must set its own model and reads credentials only
+# from the named environment variable.
+#
+# llm_profiles:
+#   query:
+#     provider: openrouter
+#     model: openai/gpt-4.1-mini
+#     api_key_env: OPENROUTER_API_KEY
+#   ingest:
+#     temperature: 0.1
 
 # Sentence embedding configuration
 embeddings:

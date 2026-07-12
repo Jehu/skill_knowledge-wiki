@@ -21,7 +21,8 @@ from typing import Dict, Optional, Tuple
 import requests
 import yaml
 
-from wiki_core import resolve_wiki_root
+from llm_client import LLMClientError, generate_text
+from wiki_core import resolve_llm_config, resolve_wiki_root
 
 # -------------------------------------------------------------------------
 # Ollama-Defaults (gleich wie auto_categorize.py)
@@ -98,7 +99,16 @@ def _ollama_available(ollama_url: str = DEFAULT_OLLAMA_URL) -> bool:
         return False
 
 
-def _ollama_relevance_check(
+def _runtime_llm_overrides(model: str, ollama_url: str) -> Dict[str, str]:
+    overrides: Dict[str, str] = {}
+    if model != DEFAULT_MODEL:
+        overrides["model"] = model
+    if ollama_url != DEFAULT_OLLAMA_URL:
+        overrides["host"] = ollama_url
+    return overrides
+
+
+def _llm_relevance_check(
     title: str,
     content: str,
     profile_body: str,
@@ -106,10 +116,11 @@ def _ollama_relevance_check(
     model: str = DEFAULT_MODEL,
 ) -> bool:
     """
-    Stufe 2: Ollama entscheidet im Graubereich.
+    Stufe 2: Der konfigurierte LLM entscheidet im Graubereich.
     Conservativ: bei Fehler → True (relevant).
     """
-    if not _ollama_available(ollama_url):
+    llm_cfg = resolve_llm_config(profile="relevance", overrides=_runtime_llm_overrides(model, ollama_url))
+    if llm_cfg.get("provider") == "ollama" and not _ollama_available(llm_cfg.get("host", ollama_url)):
         logging.warning("Ollama nicht erreichbar, conservativ: als relevant gewertet")
         return True
 
@@ -123,39 +134,17 @@ def _ollama_relevance_check(
         'Antworte mit NUR einem Wort: "relevant" oder "irrelevant"'
     )
 
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.0,
-            "num_predict": 10,
-        },
-    }
-
     try:
-        resp = requests.post(
-            f"{ollama_url}/api/generate",
-            json=payload,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        answer = data.get("response", "").strip().lower()
-        logging.debug("Ollama Antwort: '%s'", answer)
+        result = generate_text(prompt, llm_cfg, temperature=0.0, num_predict=10)
+        answer = result.text.strip().lower()
+        logging.debug("LLM Antwort: '%s'", answer)
 
         if "irrelevant" in answer:
             return False
         return True
 
-    except requests.Timeout:
-        logging.warning("Ollama Timeout, conservativ: als relevant gewertet")
-        return True
-    except requests.ConnectionError:
-        logging.warning("Ollama Connection Error, conservativ: als relevant gewertet")
-        return True
-    except Exception as exc:
-        logging.warning("Ollama Fehler: %s, conservativ: als relevant gewertet", exc)
+    except LLMClientError as exc:
+        logging.warning("LLM Fehler: %s, conservativ: als relevant gewertet", exc)
         return True
 
 
@@ -259,14 +248,14 @@ def check_relevance(
     # -----------------------------------------------------------------
     # Graubereich → Stufe 2: Ollama
     # -----------------------------------------------------------------
-    logging.info("Graubereich – frage Ollama (Stufe 2)")
-    ollama_says = _ollama_relevance_check(
+    logging.info("Graubereich – frage LLM (Stufe 2)")
+    ollama_says = _llm_relevance_check(
         title, content, profile_body, ollama_url=ollama_url, model=model
     )
     if ollama_says:
-        return {"relevant": True, "reason": "Ollama: relevant (Graubereich)", "stage": 2}
+        return {"relevant": True, "reason": "LLM: relevant (Graubereich)", "stage": 2}
     else:
-        return {"relevant": False, "reason": "Ollama: irrelevant (Graubereich)", "stage": 2}
+        return {"relevant": False, "reason": "LLM: irrelevant (Graubereich)", "stage": 2}
 
 
 # =========================================================================

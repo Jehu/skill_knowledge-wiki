@@ -57,6 +57,7 @@ from wiki_core import (
     upsert_claim,
     resolve_llm_config,
 )
+from llm_client import LLMClientError, generate_text
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -564,17 +565,11 @@ def check_duplicate(wiki_root: str, category: str, slug: str) -> bool:
 # Entity / Concept extraction via Ollama (gemma4:e4b)
 # ---------------------------------------------------------------------------
 def _call_ollama_extract(content: str, source_ref: str = "") -> List[Dict[str, Any]]:
-    """Ruft Ollama zur Entity/Concept-Extraktion auf.
+    """Ruft den konfigurierten LLM zur Entity/Concept-Extraktion auf.
 
     Returns list of dicts with keys:
         kind, slug, title, description, confidence, provenance_state, inferred_paragraphs
     """
-    try:
-        import requests
-    except ImportError:
-        logging.warning("requests nicht verfuegbar, ueberspringe LLM-Extraktion")
-        return []
-
     # Content auf sinnvolle Laenge kuerzen (wichtigste Info meist am Anfang)
     max_chars = 6000
     truncated = content[:max_chars]
@@ -625,20 +620,14 @@ def _call_ollama_extract(content: str, source_ref: str = "") -> List[Dict[str, A
 
     import json
     try:
-        llm_cfg = resolve_llm_config()
-        resp = requests.post(
-            f"{llm_cfg['host']}/api/generate",
-            json={
-                "model": llm_cfg["model"],
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": 0.1, "num_predict": 4096},
-            },
-            timeout=llm_cfg["timeout"],
+        llm_cfg = resolve_llm_config(profile="ingest")
+        result = generate_text(
+            prompt,
+            llm_cfg,
+            temperature=0.1,
+            num_predict=4096,
         )
-        resp.raise_for_status()
-        data = resp.json()
-        response_text = data.get("response", "")
+        response_text = result.text
 
         # JSON aus evtl. Markdown-Codeblock extrahieren
         json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response_text)
@@ -750,15 +739,15 @@ def _call_ollama_extract(content: str, source_ref: str = "") -> List[Dict[str, A
         logging.info("LLM extrahiert: %d entities, %d concepts", len(entities), len(concepts))
         return output
 
-    except requests.exceptions.ConnectionError:
-        logging.warning("Ollama nicht erreichbar (localhost:11434), ueberspringe LLM-Extraktion")
-        return []
     except json.JSONDecodeError as exc:
         raw = response_text[:500] if 'response_text' in dir() else "N/A"
         raw_len = len(response_text) if 'response_text' in dir() else 0
         logging.warning("LLM-Antwort war kein gueltiges JSON (%d Zeichen): %s", raw_len, exc)
         logging.warning("Raw start: %s", raw[:200])
         logging.warning("Raw end:   %s", response_text[-200:] if raw_len > 200 else raw[-200:])
+        return []
+    except LLMClientError as exc:
+        logging.warning("LLM-Extraktion fehlgeschlagen: %s", exc)
         return []
     except Exception as exc:  # pylint: disable=broad-except
         logging.warning("LLM-Extraktion fehlgeschlagen: %s", exc)

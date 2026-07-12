@@ -2,11 +2,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from ingest_source import _copy_source_images, main, save_concept
+from ingest_source import _call_ollama_extract, _copy_source_images, main, save_concept
+from llm_client import LLMClientError
 from wiki_core import load_claim_sidecar
 from youtube_transcripts import TranscriptSegment, YoutubeTranscriptResult
 
@@ -49,6 +51,43 @@ class CopySourceImagesTests(unittest.TestCase):
 
             self.assertFalse(copied)
             self.assertEqual(source_path.read_text(encoding="utf-8"), "content")
+
+
+class IngestLLMExtractionTests(unittest.TestCase):
+    def test_extract_uses_ingest_profile_shared_client_and_parses_fenced_json(self):
+        response = """```json
+{
+  "entities": [
+    {
+      "title": "OpenRouter",
+      "type": "company",
+      "description": "Routing provider. ^[raw/ai/source.md]",
+      "confidence": 0.8,
+      "provenance_state": "extracted",
+      "inferred_paragraphs": 0
+    }
+  ],
+  "concepts": []
+}
+```"""
+
+        with mock.patch("ingest_source.resolve_llm_config", return_value={"provider": "ollama", "model": "ingest-model", "timeout": 30}) as resolve:
+            with mock.patch("ingest_source.generate_text", return_value=SimpleNamespace(text=response)) as generate:
+                extracted = _call_ollama_extract("Article body", source_ref="raw/ai/source.md")
+
+        resolve.assert_called_once_with(profile="ingest")
+        generate.assert_called_once()
+        self.assertIn("Article body", generate.call_args.args[0])
+        self.assertEqual(generate.call_args.args[1]["model"], "ingest-model")
+        self.assertEqual(generate.call_args.kwargs["temperature"], 0.1)
+        self.assertEqual(generate.call_args.kwargs["num_predict"], 4096)
+        self.assertEqual(extracted[0]["kind"], "entity")
+        self.assertEqual(extracted[0]["title"], "OpenRouter")
+
+    def test_extract_client_failure_returns_empty_result(self):
+        with mock.patch("ingest_source.resolve_llm_config", return_value={"provider": "openrouter", "model": "remote"}):
+            with mock.patch("ingest_source.generate_text", side_effect=LLMClientError("openrouter/remote: failed")):
+                self.assertEqual(_call_ollama_extract("Article body"), [])
 
 
 class IngestCategoryCliTests(unittest.TestCase):
