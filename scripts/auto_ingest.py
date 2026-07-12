@@ -36,6 +36,7 @@ import requests
 import yaml
 
 from wiki_core import resolve_wiki_root
+from youtube_transcripts import canonical_youtube_url, parse_youtube_identity
 
 # Relevance-Check (zweistufig)
 try:
@@ -115,17 +116,7 @@ def init_db(db_path: Path) -> None:
 
 def _normalize_youtube_url(url: str) -> str:
     """Normalisiert YouTube-URLs auf ein einheitliches Format."""
-    import re
-    # Extrahiere Video-ID aus verschiedenen Formaten
-    patterns = [
-        r'(?:youtube\.com/watch\?v=|youtu\.be/)([A-Za-z0-9_-]{11})',
-        r'youtube\.com/embed/([A-Za-z0-9_-]{11})',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return f"https://youtu.be/{match.group(1)}"
-    return url
+    return canonical_youtube_url(url)
 
 
 def is_processed(db_path: Path, url: str, title: str) -> bool:
@@ -440,15 +431,8 @@ _fetch_youtube_transcript = _fetch_video_transcript
 
 def _extract_video_id(url: str) -> Optional[str]:
     """Extrahiert YouTube Video ID aus URL."""
-    patterns = [
-        r'(?:youtube\.com/watch\?v=|youtu\.be/)([A-Za-z0-9_-]{11})',
-        r'youtube\.com/embed/([A-Za-z0-9_-]{11})',
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, url)
-        if m:
-            return m.group(1)
-    return None
+    identity = parse_youtube_identity(url)
+    return identity.video_id if identity else None
 
 
 def _should_skip_by_relevance(
