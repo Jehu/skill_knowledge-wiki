@@ -27,7 +27,7 @@ SCRIPT_DIR = Path(__file__).parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from wiki_core import resolve_wiki_root
+from wiki_core import coordinated_write_text, resolve_wiki_root
 from wiki_lint import parse_frontmatter
 
 # ---------------------------------------------------------------------------
@@ -282,7 +282,7 @@ def process_page(page_path: Path, wiki_root: Path, dry_run: bool, verbose: bool)
             import yaml
             fm_yaml = yaml.dump(updated_meta, allow_unicode=True, default_flow_style=False)
             full_text = f"---\n{fm_yaml}---\n\n{body}"
-            page_path.write_text(full_text, encoding="utf-8")
+            coordinated_write_text(wiki_root, page_path, full_text)
         except Exception as exc:
             # Attempt to restore from backup
             try:

@@ -9,12 +9,13 @@ starting, honor its STOP conditions, and update the row when done.
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 001 | Make scripts cleanup and wiki-root handling consistent | P1 | M | — | DONE |
+| 002 | Build a compounding, multi-agent-safe wiki core | P1 | L | 001 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
 ## Dependency notes
 
-- No dependencies.
+- Plan 002 builds on the shared wiki-root and safety conventions completed in Plan 001.
 
 ## Findings considered and rejected
 

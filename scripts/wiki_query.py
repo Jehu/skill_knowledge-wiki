@@ -36,7 +36,6 @@ try:
 except Exception:
     CFG = {}
 
-LLM_CFG = (CFG or {}).get("llm", {})
 EMB_CFG = (CFG or {}).get("embeddings", {})
 
 # ---------------------------------------------------------------------------
@@ -60,12 +59,16 @@ try:
         dump_frontmatter,
         parse_frontmatter,
         resolve_wiki_root,
+        coordinated_write_text,
+        load_wiki_config,
+        resolve_llm_config,
     )
 except ImportError as exc:
     logging.error("Konnte wiki_core.py nicht importieren: %s", exc)
     sys.exit(1)
 
 DEFAULT_WIKI_ROOT = resolve_wiki_root()
+LLM_CFG = resolve_llm_config(load_wiki_config(CONFIG_PATH))
 
 
 # ---------------------------------------------------------------------------
@@ -572,11 +575,15 @@ def save_synthesis(
     inferred_paragraphs: int,
     done_reason: str,
     confidence: float,
-) -> Path:
-    """Save synthesis page with enhanced frontmatter."""
+    promote: bool = False,
+) -> Optional[Path]:
+    """Save a promoted synthesis page with enhanced frontmatter."""
+    if not promote:
+        logging.info("Query answer is ephemeral; use --promote to persist it.")
+        return None
+
     root = Path(wiki_root)
     synthesis_dir = root / "synthesis"
-    synthesis_dir.mkdir(exist_ok=True)
     
     today = datetime.now().strftime("%Y-%m-%d")
     
@@ -702,7 +709,12 @@ def save_synthesis(
     
     linked_answer = inject_wikilinks(fixed_answer, wiki_index, rel_path)
     
-    synthesis_path.write_text(dump_frontmatter(meta, linked_answer), encoding="utf-8")
+    coordinated_write_text(
+        root,
+        synthesis_path,
+        dump_frontmatter(meta, linked_answer),
+        job_id=f"promote-synthesis:{filename}",
+    )
     logging.info("Saved synthesis: %s", synthesis_path)
     
     return synthesis_path
@@ -740,6 +752,7 @@ def main():
     parser.add_argument("--question", required=True, help="Die zu beantwortende Frage")
     parser.add_argument("--wiki-root", default=DEFAULT_WIKI_ROOT)
     parser.add_argument("--max-context-tokens", type=int, default=50000, help="Max tokens for context")
+    parser.add_argument("--promote", action="store_true", help="Persist answer as a synthesis page")
     args = parser.parse_args()
     
     wiki_root = resolve_wiki_root(args.wiki_root).resolve()
@@ -799,11 +812,14 @@ def main():
         inferred,
         done_reason,
         confidence,
+        promote=args.promote,
     )
-    
-    regen_index(str(wiki_root))
-    
-    print(f"\nGespeichert: {synthesis_path}")
+
+    if synthesis_path:
+        regen_index(str(wiki_root))
+        print(f"\nGespeichert: {synthesis_path}")
+    else:
+        print("\nNicht gespeichert. Nutze --promote fuer persistente Synthesen.")
 
 
 if __name__ == "__main__":

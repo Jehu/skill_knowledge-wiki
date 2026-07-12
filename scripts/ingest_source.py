@@ -50,6 +50,10 @@ from wiki_core import (
     resolve_raw_descendant,
     resolve_wiki_root,
     validate_category_segment,
+    coordinated_write_text,
+    build_evidence_locator,
+    upsert_claim,
+    resolve_llm_config,
 )
 
 # ---------------------------------------------------------------------------
@@ -619,15 +623,16 @@ def _call_ollama_extract(content: str, source_ref: str = "") -> List[Dict[str, A
 
     import json
     try:
+        llm_cfg = resolve_llm_config()
         resp = requests.post(
-            "http://localhost:11434/api/generate",
+            f"{llm_cfg['host']}/api/generate",
             json={
-                "model": "gemma4:e4b",
+                "model": llm_cfg["model"],
                 "prompt": prompt,
                 "stream": False,
                 "options": {"temperature": 0.1, "num_predict": 4096},
             },
-            timeout=120,
+            timeout=llm_cfg["timeout"],
         )
         resp.raise_for_status()
         data = resp.json()
@@ -765,11 +770,63 @@ def extract_entities_concepts(
     return _call_ollama_extract(content, source_ref=source_path)
 
 
+def _best_evidence_excerpt(raw_text: str, statement: str) -> str:
+    statement = (statement or "").strip()
+    if statement and statement in raw_text:
+        return statement
+    if statement:
+        first_sentence = statement.split(".", 1)[0].strip()
+        if first_sentence and first_sentence in raw_text:
+            return first_sentence
+    words = raw_text.split()
+    return " ".join(words[: min(len(words), 20)])
+
+
+def _record_claim_and_reconcile(
+    wiki_root: str,
+    page_kind: str,
+    slug: str,
+    source_ref: str,
+    statement: str,
+    confidence: Optional[float],
+) -> None:
+    raw_path = Path(wiki_root) / source_ref
+    if not statement.strip() or not raw_path.exists():
+        return
+    try:
+        raw_text = raw_path.read_text(encoding="utf-8")
+        excerpt = _best_evidence_excerpt(raw_text, statement)
+        locator = build_evidence_locator(
+            wiki_root,
+            raw_path,
+            excerpt,
+            extractor_version="ingest_source:v1",
+            source_tier="derived",
+        )
+        upsert_claim(
+            wiki_root,
+            page_kind,
+            slug,
+            statement,
+            locator,
+            confidence=confidence,
+        )
+        try:
+            from wiki_reconcile import reconcile_page
+
+            reconcile_page(wiki_root, page_kind, slug)
+        except Exception as exc:  # pylint: disable=broad-except
+            logging.warning("reconcile failed for %s/%s: %s", page_kind, slug, exc)
+    except Exception as exc:  # pylint: disable=broad-except
+        logging.warning("claim recording failed for %s/%s: %s", page_kind, slug, exc)
+
+
 def save_entity(slug: str, title: str, source_ref: str, wiki_root: str, description: str = "",
                 confidence=None, provenance_state=None, inferred_paragraphs=None,
                 wiki_index: Optional[List[Tuple[str, str, str]]] = None):
     """Persist an entity stub (idempotent) with epistemic metadata and wikilink injection."""
     path = Path(wiki_root) / "wiki" / "entities" / f"{slug}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
     entity_rel_path = f"wiki/entities/{slug}"
     today = datetime.now().strftime("%Y-%m-%d")
     if path.exists():
@@ -800,7 +857,7 @@ def save_entity(slug: str, title: str, source_ref: str, wiki_root: str, descript
             # Inject wikilinks into existing body
             if wiki_index and content:
                 content = inject_wikilinks(content, wiki_index, entity_rel_path, self_slug=slug)
-            path.write_text(dump_frontmatter(meta, content), encoding="utf-8")
+            coordinated_write_text(wiki_root, path, dump_frontmatter(meta, content), job_id=f"entity:{slug}:{source_ref}")
             logging.info("Updated entity: %s", slug)
     elif description.strip():
         meta = {
@@ -821,8 +878,10 @@ def save_entity(slug: str, title: str, source_ref: str, wiki_root: str, descript
         # Inject wikilinks into new body
         if wiki_index:
             body = inject_wikilinks(body, wiki_index, entity_rel_path, self_slug=slug)
-        path.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+        coordinated_write_text(wiki_root, path, dump_frontmatter(meta, body), job_id=f"entity:{slug}:{source_ref}")
         logging.info("Created entity: %s", slug)
+
+    _record_claim_and_reconcile(wiki_root, "entities", slug, source_ref, description or title, confidence)
 
     # Rebuild Quellen section (non-blocking)
     try:
@@ -836,6 +895,7 @@ def save_concept(slug: str, title: str, source_ref: str, wiki_root: str, descrip
                   wiki_index: Optional[List[Tuple[str, str, str]]] = None):
     """Persist a concept stub (idempotent) with epistemic metadata and wikilink injection."""
     path = Path(wiki_root) / "wiki" / "concepts" / f"{slug}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
     concept_rel_path = f"wiki/concepts/{slug}"
     today = datetime.now().strftime("%Y-%m-%d")
     if path.exists():
@@ -865,7 +925,7 @@ def save_concept(slug: str, title: str, source_ref: str, wiki_root: str, descrip
             # Inject wikilinks into existing body
             if wiki_index and content:
                 content = inject_wikilinks(content, wiki_index, concept_rel_path, self_slug=slug)
-            path.write_text(dump_frontmatter(meta, content), encoding="utf-8")
+            coordinated_write_text(wiki_root, path, dump_frontmatter(meta, content), job_id=f"concept:{slug}:{source_ref}")
             logging.info("Updated concept: %s", slug)
     elif description.strip():
         meta = {
@@ -885,8 +945,10 @@ def save_concept(slug: str, title: str, source_ref: str, wiki_root: str, descrip
         # Inject wikilinks into new body
         if wiki_index:
             body = inject_wikilinks(body, wiki_index, concept_rel_path, self_slug=slug)
-        path.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+        coordinated_write_text(wiki_root, path, dump_frontmatter(meta, body), job_id=f"concept:{slug}:{source_ref}")
         logging.info("Created concept: %s", slug)
+
+    _record_claim_and_reconcile(wiki_root, "concepts", slug, source_ref, description or title, confidence)
 
     # Rebuild Quellen section (non-blocking)
     try:
@@ -1069,7 +1131,7 @@ def rebuild_source_links(slug: str, page_type: str, wiki_root: str) -> None:
     body = body.rstrip() + "\n\n" + "\n".join(quellen_lines) + "\n"
 
     # Write back
-    page_path.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    coordinated_write_text(wiki_root_path, page_path, dump_frontmatter(meta, body))
     logging.info("Rebuilt Quellen for %s/%s: %d sources", page_type, slug, len(fixed_refs))
 
 

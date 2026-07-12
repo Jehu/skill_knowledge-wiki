@@ -39,6 +39,9 @@ try:
         load_wiki_index,
         parse_frontmatter,
         resolve_wiki_root,
+        claim_source_refs,
+        coordinated_write_text,
+        publish_generation_manifest,
     )
 except ImportError as exc:
     logging.error("Konnte wiki_core.py nicht importieren: %s", exc)
@@ -87,7 +90,7 @@ class WikiGraph:
         }
     
     def save(self, path: Path):
-        path.write_text(json.dumps(self.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        coordinated_write_text(path.parent, path, json.dumps(self.to_dict(), indent=2, ensure_ascii=False))
         logging.info("Graph saved: %s (%d nodes, %d edges)", path, len(self.nodes), len(self.edges))
 
 
@@ -203,7 +206,7 @@ def build_wiki_graph(wiki_root: str, force: bool = False) -> WikiGraph:
                 node_type,
                 title=meta.get("title", md_file.stem),
                 slug=meta.get("slug", ""),
-                source_refs=meta.get("source_refs", []),
+                source_refs=_combined_source_refs(root, rel_path, meta),
                 confidence=meta.get("confidence", None),
             )
     
@@ -260,8 +263,28 @@ def build_wiki_graph(wiki_root: str, force: bool = False) -> WikiGraph:
     # 4. Save graph
     # -----------------------------------------------------------------------
     G.save(graph_path)
+    publish_generation_manifest(root, {"wiki_graph": graph_path.name})
     
     return G
+
+
+def _combined_source_refs(root: Path, rel_path: str, meta: dict) -> List[str]:
+    refs = meta.get("source_refs", [])
+    if isinstance(refs, str):
+        refs = [refs]
+    if not isinstance(refs, list):
+        refs = []
+    page_kind = None
+    if rel_path.startswith("wiki/entities/"):
+        page_kind = "entities"
+    elif rel_path.startswith("wiki/concepts/"):
+        page_kind = "concepts"
+    slug = meta.get("slug") or Path(rel_path).stem
+    if page_kind:
+        for ref in claim_source_refs(root, page_kind, slug):
+            if ref not in refs:
+                refs.append(ref)
+    return refs
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +363,7 @@ def build_embedding_index(G: WikiGraph, wiki_root: Path, force: bool = False) ->
         "node_count": len(embeddings),
         "embeddings": embeddings,
     }
-    index_path.write_text(json.dumps(index_data, indent=2, ensure_ascii=False), encoding="utf-8")
+    coordinated_write_text(wiki_root, index_path, json.dumps(index_data, indent=2, ensure_ascii=False))
     logging.info("Embedding index saved: %d nodes, %d dimensions", len(embeddings), 384)
     
     return embeddings
@@ -468,7 +491,11 @@ def main():
         }
         for cid, nodes in communities.items()
     }
-    community_path.write_text(json.dumps(community_data, indent=2, ensure_ascii=False), encoding="utf-8")
+    coordinated_write_text(
+        wiki_root,
+        community_path,
+        json.dumps(community_data, indent=2, ensure_ascii=False),
+    )
     logging.info("Communities saved: %s", community_path)
 
 

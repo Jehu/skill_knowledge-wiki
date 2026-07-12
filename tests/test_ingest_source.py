@@ -6,7 +6,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from ingest_source import _copy_source_images, main
+from ingest_source import _copy_source_images, main, save_concept
+from wiki_core import load_claim_sidecar
 
 
 class CopySourceImagesTests(unittest.TestCase):
@@ -128,6 +129,29 @@ class IngestCategoryCliTests(unittest.TestCase):
 
             matches = list((wiki_root / "raw" / "ai-agents").glob("*-safe-category.md"))
             self.assertEqual(len(matches), 1)
+
+
+class IngestClaimIntegrationTests(unittest.TestCase):
+    def test_save_concept_creates_claim_sidecar_and_reconciled_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wiki_root = Path(tmp) / "wiki"
+            raw = wiki_root / "raw" / "ai" / "source.md"
+            raw.parent.mkdir(parents=True)
+            raw.write_text("Agent memory compounds across sessions.", encoding="utf-8")
+
+            save_concept(
+                "agent-memory",
+                "Agent Memory",
+                "raw/ai/source.md",
+                str(wiki_root),
+                description="Agent memory compounds across sessions.",
+                confidence=0.8,
+            )
+
+            sidecar = load_claim_sidecar(wiki_root, "concepts", "agent-memory")
+            page = wiki_root / "wiki" / "concepts" / "agent-memory.md"
+            self.assertEqual(len(sidecar["claims"]), 1)
+            self.assertIn("## Aktueller Stand", page.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

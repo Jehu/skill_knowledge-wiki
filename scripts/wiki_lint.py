@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Set, Tuple
 # ---------------------------------------------------------------------------
 # Frontmatter helpers — imported from wiki_core (shared module)
 # ---------------------------------------------------------------------------
-from wiki_core import parse_frontmatter
+from wiki_core import coordinated_write_text, parse_frontmatter
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +134,7 @@ def fix_broken_links(wiki_root: Path, broken: List[dict]) -> int:
             fixed += 1
 
         try:
-            file_path.write_text(text, encoding="utf-8")
+            coordinated_write_text(wiki_root, file_path, text)
         except OSError:
             continue
 

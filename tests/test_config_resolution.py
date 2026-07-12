@@ -6,7 +6,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from wiki_core import resolve_wiki_root
+from wiki_core import load_wiki_config, resolve_llm_config, resolve_wiki_root
 import retrofit_provenance
 from retrofit_provenance import resolve_retrofit_wiki_root
 
@@ -47,6 +47,20 @@ class WikiRootResolutionTests(unittest.TestCase):
         config_path = Path(__file__).resolve().parents[1] / "config.yaml"
 
         self.assertEqual(resolve_wiki_root(config_path=config_path, env={}), Path.home() / "knowledge")
+
+    def test_shared_llm_config_resolves_model_host_and_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.yaml"
+            config_path.write_text(
+                "llm:\n  model: test-model\n  host: http://ollama.test\n  timeout: 42\n",
+                encoding="utf-8",
+            )
+
+            cfg = resolve_llm_config(load_wiki_config(config_path))
+
+        self.assertEqual(cfg["model"], "test-model")
+        self.assertEqual(cfg["host"], "http://ollama.test")
+        self.assertEqual(cfg["timeout"], 42)
 
     def test_retrofit_provenance_uses_environment_wiki_root(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -21,6 +21,8 @@ from typing import List, Optional, Tuple
 
 import requests
 
+from wiki_core import coordinated_write_text
+
 logging.basicConfig(
     level=logging.INFO,
     format="[%(levelname)s] %(message)s",
@@ -368,7 +370,7 @@ def process_file(
         new_path = new_dir / path.name
 
         # Schreibe neue Datei, loesche alte
-        new_path.write_text(new_raw, encoding="utf-8")
+        coordinated_write_text(wiki_root, new_path, new_raw)
         path.unlink()
 
         # Alten Index-Ordner saeubern wenn leer

@@ -18,7 +18,7 @@ from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
 
-from wiki_core import resolve_wiki_root
+from wiki_core import coordinated_write_text, resolve_wiki_root
 
 # ---------------------------------------------------------------------------
 # Resolve wiki root: CLI arg > env > config.yaml > ~/knowledge
@@ -393,42 +393,24 @@ def main():
 
     # 2. Zieldateien schreiben
     # wiki/_index.md
-    (WIKI_ROOT / "wiki" / "_index.md").write_text(
-        generate_wiki_index(entities_by_type, concepts, syntheses, wiki_categories),
-        encoding="utf-8"
-    )
+    coordinated_write_text(WIKI_ROOT, WIKI_ROOT / "wiki" / "_index.md", generate_wiki_index(entities_by_type, concepts, syntheses, wiki_categories))
 
     # wiki/entities/_index.md
-    (WIKI_ROOT / "wiki" / "entities" / "_index.md").write_text(
-        generate_entities_index(entities_by_type),
-        encoding="utf-8"
-    )
+    coordinated_write_text(WIKI_ROOT, WIKI_ROOT / "wiki" / "entities" / "_index.md", generate_entities_index(entities_by_type))
 
     # wiki/concepts/_index.md
-    (WIKI_ROOT / "wiki" / "concepts" / "_index.md").write_text(
-        generate_concepts_index(concepts),
-        encoding="utf-8"
-    )
+    coordinated_write_text(WIKI_ROOT, WIKI_ROOT / "wiki" / "concepts" / "_index.md", generate_concepts_index(concepts))
 
     # synthesis/_index.md
-    (WIKI_ROOT / "synthesis" / "_index.md").write_text(
-        generate_synthesis_index(syntheses),
-        encoding="utf-8"
-    )
+    coordinated_write_text(WIKI_ROOT, WIKI_ROOT / "synthesis" / "_index.md", generate_synthesis_index(syntheses))
 
     # raw/_home.md
-    (WIKI_ROOT / "raw" / "_home.md").write_text(
-        generate_raw_home(raw_categories),
-        encoding="utf-8"
-    )
+    coordinated_write_text(WIKI_ROOT, WIKI_ROOT / "raw" / "_home.md", generate_raw_home(raw_categories))
 
     # raw/{category}/_index.md
     for cat_path in raw_categories:
         idx_path = cat_path / "_index.md"
-        idx_path.write_text(
-            generate_raw_category_index(cat_path),
-            encoding="utf-8"
-        )
+        coordinated_write_text(WIKI_ROOT, idx_path, generate_raw_category_index(cat_path))
 
     # 3. Zusammenfassung ausgeben
     total_entities = sum(len(v) for v in entities_by_type.values())

@@ -15,8 +15,8 @@ any AI agent's skill directory and go.
 
 | Subsystem | What it does |
 |-----------|-------------|
-| **Query** | Hybrid GraphRAG retrieval — 4-phase pipeline, Ollama-powered answers with source citations |
-| **Ingest** | Ingest URLs, local files, or raw text. Auto-extracts entities/concepts, injects wikilinks, categorises |
+| **Query** | Hybrid GraphRAG retrieval — 4-phase pipeline, Ollama-powered answers with source citations; read-only by default |
+| **Ingest** | Ingest URLs, local files, or raw text. Auto-extracts claim-backed entities/concepts, injects wikilinks, categorises |
 | **Lint** | Checks for broken links, orphan pages, stale content, and frontmatter issues |
 | **Maintain** | Regenerate indices, retrofit provenance metadata, migrate link paths after restructuring |
 
@@ -85,7 +85,12 @@ The 4-phase retrieval pipeline:
 4. **Sentence embedding similarity** — synonym / semantic matches
 
 Context is assembled from ~50 files (~50k tokens). Answers include clickable
-Markdown citations and a confidence score. Results are saved to `synthesis/`.
+Markdown citations and a confidence score. Results are ephemeral by default.
+Use `--promote` to persist a cited answer to `synthesis/`.
+
+```bash
+python3 scripts/wiki_query.py --question "What is the agent-skills pattern?" --promote
+```
 
 ### Ingest — Add content
 
@@ -114,9 +119,10 @@ python3 scripts/auto_ingest.py --config config/feeds.yaml --relevance
 The filter reads `wiki/config/relevance-profile.md` from your wiki root.
 A template with all available options is at [`wiki_demo/wiki/config/relevance-profile.md`](wiki_demo/wiki/config/relevance-profile.md).
 
-Ingest extracts entities and concepts, injects wikilinks (Markdown links —
-[`target](relative/path.md) format), auto-categorises, and triggers a
-graph rebuild.
+Ingest extracts claim-backed entities and concepts, writes claim sidecars under
+`wiki/claims/`, reconciles affected pages, injects wikilinks (Markdown links —
+[`target](relative/path.md) format), auto-categorises, and triggers a graph
+rebuild.
 
 ### Lint — Check wiki health
 
@@ -131,9 +137,17 @@ or malformed frontmatter, and duplicate slugs.
 
 ```bash
 python3 scripts/regen_index.py              # Rebuild all _index.md files
+python3 scripts/wiki_graph_builder.py --force
+python3 scripts/wiki_reconcile.py agent-memory --kind concepts
+python3 scripts/migrate_claim_ledger.py --apply
+python3 scripts/wiki_maintain.py            # Inspect writer journal state
 python3 scripts/retrofit_provenance.py      # Add confidence/provenance metadata
 python3 scripts/migrate_paths.py --dry-run  # Preview link path migrations
 ```
+
+Canonical writes use a local maintainer boundary with a filesystem lock,
+durable job journal, and atomic replacement. This protects same-host local/VPS
+agents from torn JSON/Markdown writes and makes failed jobs retryable.
 
 ---
 

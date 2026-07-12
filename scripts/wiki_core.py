@@ -13,8 +13,19 @@ import logging
 import os
 import re
 import uuid
+import json
+import hashlib
+import tempfile
+import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback is best-effort.
+    fcntl = None
 
 # ---------------------------------------------------------------------------
 # Slug generation
@@ -129,6 +140,51 @@ def _read_config_wiki_root(config_path: Path) -> Optional[str]:
     return None
 
 
+def load_wiki_config(config_path: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
+    """Load config.yaml with a YAML parser when available and a simple fallback."""
+    config_file = Path(config_path) if config_path else Path(__file__).resolve().parent.parent / "config.yaml"
+    if not config_file.exists():
+        return {}
+    try:
+        import yaml  # type: ignore
+
+        return yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+    except Exception:
+        data: Dict[str, Any] = {}
+        current_section: Optional[str] = None
+        for line in config_file.read_text(encoding="utf-8").splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if not line.startswith(" ") and ":" in line:
+                key, value = line.split(":", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if value:
+                    data[key] = value
+                    current_section = None
+                else:
+                    data[key] = {}
+                    current_section = key
+            elif current_section and ":" in line:
+                key, value = line.split(":", 1)
+                value = value.strip().strip('"').strip("'")
+                data[current_section][key.strip()] = int(value) if value.isdigit() else value
+        return data
+
+
+def resolve_llm_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Return normalized model/provider settings with Ollama-compatible defaults."""
+    llm = (config or load_wiki_config()).get("llm", {})
+    return {
+        "model": llm.get("model", "gemma4:e4b"),
+        "host": str(llm.get("host", "http://localhost:11434")).rstrip("/"),
+        "temperature": llm.get("temperature", 0.3),
+        "num_predict": llm.get("num_predict", 8192),
+        "num_ctx": llm.get("num_ctx", 65536),
+        "timeout": llm.get("timeout", 180),
+    }
+
+
 def resolve_wiki_root(
     cli_value: Optional[Union[str, Path]] = None,
     *,
@@ -147,6 +203,356 @@ def resolve_wiki_root(
     if config_value:
         return Path(config_value).expanduser()
     return Path.home() / "knowledge"
+
+
+# ---------------------------------------------------------------------------
+# Atomic writes and maintainer boundary
+# ---------------------------------------------------------------------------
+def _fsync_directory(path: Path) -> None:
+    """Best-effort fsync for a directory after atomic replacement."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def atomic_write_text(path: Union[str, Path], text: str, *, encoding: str = "utf-8") -> None:
+    """Atomically write text by fsyncing a temp file and replacing the target."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, target)
+        _fsync_directory(target.parent)
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+class WikiAtomicWriter:
+    """Write helper exposed inside a coordinated wiki mutation."""
+
+    def __init__(self, wiki_root: Union[str, Path]):
+        self.wiki_root = Path(wiki_root)
+        self._writes: List[Tuple[Path, str, str]] = []
+
+    def write_text(self, path: Union[str, Path], text: str, *, encoding: str = "utf-8") -> None:
+        self._writes.append((Path(path), text, encoding))
+
+    def write_json(self, path: Union[str, Path], data: Any) -> None:
+        payload = json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+        self.write_text(path, payload)
+
+    def commit(self) -> None:
+        for path, text, encoding in self._writes:
+            atomic_write_text(path, text, encoding=encoding)
+
+
+class WikiWriteCoordinator:
+    """Single-host writer coordinator with a filesystem lock and durable journal."""
+
+    def __init__(self, wiki_root: Union[str, Path]):
+        self.wiki_root = Path(wiki_root)
+        self.state_dir = self.wiki_root / ".wiki-maintain"
+        self.lock_path = self.state_dir / "writer.lock"
+        self.journal_path = self.state_dir / "journal.jsonl"
+
+    @contextmanager
+    def _locked(self):
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        with self.lock_path.open("a+", encoding="utf-8") as lock_file:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _job_states(self) -> Dict[str, str]:
+        states: Dict[str, str] = {}
+        if not self.journal_path.exists():
+            return states
+        for line in self.journal_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            job_id = event.get("job_id")
+            state = event.get("state")
+            if isinstance(job_id, str) and isinstance(state, str):
+                states[job_id] = state
+        return states
+
+    def _record(self, job_id: str, state: str, *, error: Optional[str] = None) -> None:
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        event = {
+            "job_id": job_id,
+            "state": state,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if error:
+            event["error"] = error
+        with self.journal_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        _fsync_directory(self.state_dir)
+
+    def run_job(self, job_id: str, mutate: Callable[[WikiAtomicWriter], Any]) -> Any:
+        """Run a mutation once; failed jobs remain retryable on later calls."""
+        if not job_id:
+            raise ValueError("job_id is required")
+        with self._locked():
+            if self._job_states().get(job_id) == "completed":
+                return None
+            self._record(job_id, "pending")
+            writer = WikiAtomicWriter(self.wiki_root)
+            try:
+                result = mutate(writer)
+                writer.commit()
+            except Exception as exc:
+                self._record(job_id, "failed", error=str(exc))
+                raise
+            self._record(job_id, "completed")
+            return result
+
+
+def coordinated_write_text(
+    wiki_root: Union[str, Path],
+    path: Union[str, Path],
+    text: str,
+    *,
+    job_id: Optional[str] = None,
+) -> None:
+    target = Path(path)
+    rel = _safe_relative_for_id(Path(wiki_root), target)
+    effective_job_id = job_id or f"write:{rel}:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
+    WikiWriteCoordinator(wiki_root).run_job(
+        effective_job_id,
+        lambda writer: writer.write_text(target, text),
+    )
+
+
+def _safe_relative_for_id(root: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+# ---------------------------------------------------------------------------
+# Claim ledger
+# ---------------------------------------------------------------------------
+CLAIM_LEDGER_VERSION = 1
+CLAIM_STATES = {"single-source", "supported", "conflicted", "superseded", "inferred", "needs-review"}
+
+
+def normalize_claim_statement(statement: str) -> str:
+    normalized = re.sub(r"\s+", " ", statement.strip().lower())
+    return normalized.rstrip(".")
+
+
+def claim_identity(page_kind: str, slug: str, statement: str) -> str:
+    raw = f"{page_kind}:{slug}:{normalize_claim_statement(statement)}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def claim_sidecar_path(wiki_root: Union[str, Path], page_kind: str, slug: str) -> Path:
+    if page_kind not in {"entities", "concepts", "analysis"}:
+        raise ValueError(f"unsupported claim page kind: {page_kind}")
+    return Path(wiki_root) / "wiki" / "claims" / page_kind / f"{slug}.json"
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def build_evidence_locator(
+    wiki_root: Union[str, Path],
+    source_path: Union[str, Path],
+    excerpt: str,
+    *,
+    extractor_version: str,
+    source_tier: str = "derived",
+) -> Dict[str, Any]:
+    root = Path(wiki_root)
+    source = Path(source_path)
+    text = source.read_text(encoding="utf-8")
+    start = text.find(excerpt)
+    if start == -1:
+        raise ValueError("excerpt is not present in source")
+    rel = source.resolve().relative_to(root.resolve()).as_posix()
+    return {
+        "source_path": rel,
+        "source_sha256": _sha256_file(source),
+        "excerpt": excerpt,
+        "excerpt_sha256": _sha256_text(excerpt),
+        "char_range": [start, start + len(excerpt)],
+        "extractor_version": extractor_version,
+        "source_tier": source_tier,
+    }
+
+
+def empty_claim_sidecar(page_kind: str, slug: str) -> Dict[str, Any]:
+    return {
+        "version": CLAIM_LEDGER_VERSION,
+        "page_kind": page_kind,
+        "slug": slug,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "dirty": False,
+        "claims": [],
+    }
+
+
+def load_claim_sidecar(wiki_root: Union[str, Path], page_kind: str, slug: str) -> Dict[str, Any]:
+    path = claim_sidecar_path(wiki_root, page_kind, slug)
+    if not path.exists():
+        return empty_claim_sidecar(page_kind, slug)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_claim_sidecar(wiki_root: Union[str, Path], sidecar: Dict[str, Any]) -> None:
+    page_kind = sidecar["page_kind"]
+    slug = sidecar["slug"]
+    sidecar["updated_at"] = datetime.now(timezone.utc).isoformat()
+    path = claim_sidecar_path(wiki_root, page_kind, slug)
+    payload = json.dumps(sidecar, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    job_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    coordinated_write_text(wiki_root, path, payload, job_id=f"claim-sidecar:{page_kind}:{slug}:{job_hash}")
+
+
+def _evidence_key(locator: Dict[str, Any]) -> Tuple[Any, ...]:
+    return (
+        locator.get("source_path"),
+        tuple(locator.get("char_range", [])),
+        locator.get("excerpt_sha256"),
+    )
+
+
+def upsert_claim(
+    wiki_root: Union[str, Path],
+    page_kind: str,
+    slug: str,
+    statement: str,
+    evidence_locator: Dict[str, Any],
+    *,
+    confidence: Optional[float] = None,
+    state: Optional[str] = None,
+    valid_from: Optional[str] = None,
+    valid_through: Optional[str] = None,
+) -> Dict[str, Any]:
+    sidecar = load_claim_sidecar(wiki_root, page_kind, slug)
+    normalized = normalize_claim_statement(statement)
+    claim_id = claim_identity(page_kind, slug, statement)
+    existing = None
+    for claim in sidecar["claims"]:
+        if claim.get("normalized_statement") == normalized:
+            existing = claim
+            break
+    if existing is None:
+        existing = {
+            "id": claim_id,
+            "statement": statement.strip(),
+            "normalized_statement": normalized,
+            "state": state or "single-source",
+            "confidence": confidence if confidence is not None else 0.5,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "ingested_at": datetime.now(timezone.utc).isoformat(),
+            "valid_from": valid_from,
+            "valid_through": valid_through,
+            "evidence": [],
+        }
+        sidecar["claims"].append(existing)
+    evidence = existing.setdefault("evidence", [])
+    if _evidence_key(evidence_locator) not in {_evidence_key(item) for item in evidence}:
+        evidence.append(evidence_locator)
+    if len(evidence) > 1 and existing.get("state") == "single-source":
+        existing["state"] = "supported"
+    if state and state in CLAIM_STATES:
+        existing["state"] = state
+    if confidence is not None:
+        existing["confidence"] = max(float(existing.get("confidence", 0)), float(confidence))
+    sidecar["dirty"] = True
+    save_claim_sidecar(wiki_root, sidecar)
+    return existing
+
+
+def validate_claim_sidecar(wiki_root: Union[str, Path], page_kind: str, slug: str) -> Dict[str, List[Dict[str, Any]]]:
+    root = Path(wiki_root)
+    sidecar = load_claim_sidecar(root, page_kind, slug)
+    report = {"valid": [], "invalid": []}
+    for claim in sidecar.get("claims", []):
+        claim_errors = []
+        if claim.get("state") not in CLAIM_STATES:
+            claim_errors.append("invalid state")
+        for locator in claim.get("evidence", []):
+            source = root / locator.get("source_path", "")
+            if not source.exists():
+                claim_errors.append(f"missing source: {locator.get('source_path')}")
+                continue
+            text = source.read_text(encoding="utf-8")
+            if _sha256_file(source) != locator.get("source_sha256"):
+                claim_errors.append(f"source hash mismatch: {locator.get('source_path')}")
+            start, end = locator.get("char_range", [None, None])
+            if not isinstance(start, int) or not isinstance(end, int):
+                claim_errors.append("invalid char_range")
+                continue
+            excerpt = text[start:end]
+            if _sha256_text(excerpt) != locator.get("excerpt_sha256"):
+                claim_errors.append(f"excerpt hash mismatch: {locator.get('source_path')}")
+        item = {"claim_id": claim.get("id"), "errors": claim_errors}
+        if claim_errors:
+            report["invalid"].append(item)
+        else:
+            report["valid"].append(item)
+    return report
+
+
+def claim_source_refs(wiki_root: Union[str, Path], page_kind: str, slug: str) -> List[str]:
+    sidecar = load_claim_sidecar(wiki_root, page_kind, slug)
+    refs: List[str] = []
+    seen = set()
+    for claim in sidecar.get("claims", []):
+        for locator in claim.get("evidence", []):
+            ref = locator.get("source_path")
+            if isinstance(ref, str) and ref not in seen:
+                refs.append(ref)
+                seen.add(ref)
+    return refs
+
+
+def publish_generation_manifest(wiki_root: Union[str, Path], artifacts: Dict[str, str]) -> Dict[str, Any]:
+    """Publish a reader-resolved generation manifest after artifact validation."""
+    root = Path(wiki_root)
+    generation = str(int(time.time() * 1000))
+    manifest = {
+        "generation": generation,
+        "published_at": datetime.now(timezone.utc).isoformat(),
+        "artifacts": dict(sorted(artifacts.items())),
+    }
+    path = root / "wiki_generation_manifest.json"
+    payload = json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    coordinated_write_text(root, path, payload, job_id=f"generation-manifest:{generation}")
+    return manifest
 
 
 # ---------------------------------------------------------------------------

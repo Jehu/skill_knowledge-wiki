@@ -18,6 +18,8 @@ import re
 import sys
 from pathlib import Path
 
+from wiki_core import coordinated_write_text
+
 
 def migrate_links(
     wiki_root: Path,
@@ -58,7 +60,7 @@ def migrate_links(
         if changed:
             stats["files_changed"] += 1
             if not dry_run:
-                md_file.write_text(content, encoding="utf-8")
+                coordinated_write_text(wiki_root, md_file, content)
 
     return stats
 
