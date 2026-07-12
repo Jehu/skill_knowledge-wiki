@@ -282,6 +282,24 @@ def _fetch_api_transcript(
         logging.warning("youtube-transcript-api provider failed for %s: %s", identity.video_id, exc)
         return None
 
+    tracks = _api_list_tracks(api, identity.video_id)
+    if tracks:
+        selected = select_caption_track(tracks, preferred_languages)
+        try:
+            segments = list(selected.fetch())
+        except Exception as exc:  # pylint: disable=broad-except
+            logging.warning("youtube-transcript-api provider failed (%s) for %s: %s", selected.language, identity.video_id, exc)
+            return None
+        if segments:
+            return YoutubeTranscriptResult(
+                video_id=identity.video_id,
+                canonical_url=identity.canonical_url,
+                provider="youtube-transcript-api",
+                language=selected.language,
+                caption_kind=selected.kind,
+                segments=segments,
+            )
+
     for language in preferred_languages:
         try:
             snippets = api.fetch(identity.video_id, languages=[language])
@@ -308,26 +326,7 @@ def _fetch_api_transcript(
                 identity.video_id,
                 exc,
             )
-
-    tracks = _api_list_tracks(api, identity.video_id)
-    if not tracks:
-        return None
-    selected = select_caption_track(tracks, preferred_languages)
-    try:
-        segments = list(selected.fetch())
-    except Exception as exc:  # pylint: disable=broad-except
-        logging.warning("youtube-transcript-api provider failed (%s) for %s: %s", selected.language, identity.video_id, exc)
-        return None
-    if not segments:
-        return None
-    return YoutubeTranscriptResult(
-        video_id=identity.video_id,
-        canonical_url=identity.canonical_url,
-        provider="youtube-transcript-api",
-        language=selected.language,
-        caption_kind=selected.kind,
-        segments=segments,
-    )
+    return None
 
 
 def _tracks_from_subtitle_files(directory: Path) -> list[CaptionTrack]:

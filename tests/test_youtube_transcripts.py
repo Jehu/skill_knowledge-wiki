@@ -204,6 +204,36 @@ class ProviderOrchestrationTests(unittest.TestCase):
         self.assertEqual(result.language, "de")
         self.assertIn("youtube-transcript-api provider failed", "\n".join(logs.output))
 
+    def test_api_uses_track_metadata_when_available(self):
+        class Snippet:
+            text = "manual transcript"
+            start = 0
+            duration = 1
+
+        class Track:
+            language_code = "en"
+            is_generated = False
+
+            def fetch(self):
+                return [Snippet()]
+
+        class FakeApi:
+            def list(self, video_id):
+                return [Track()]
+
+            def fetch(self, video_id, languages):
+                return [Snippet()]
+
+        result = fetch_youtube_transcript(
+            "https://www.youtube.com/watch?v=abcdefghijk",
+            preferred_languages=("en",),
+            runner=FileNotFoundRunner(),
+            api_factory=FakeApi,
+        )
+
+        self.assertEqual(result.language, "en")
+        self.assertEqual(result.caption_kind, "manual")
+
     def test_all_providers_fail_returns_none(self):
         self.assertIsNone(
             fetch_youtube_transcript(
