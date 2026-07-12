@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from ingest_source import _copy_source_images, main, save_concept
 from wiki_core import load_claim_sidecar
+from youtube_transcripts import TranscriptSegment, YoutubeTranscriptResult
 
 
 class CopySourceImagesTests(unittest.TestCase):
@@ -129,6 +130,92 @@ class IngestCategoryCliTests(unittest.TestCase):
 
             matches = list((wiki_root / "raw" / "ai-agents").glob("*-safe-category.md"))
             self.assertEqual(len(matches), 1)
+
+    def test_direct_youtube_url_uses_transcript_without_html_fetch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wiki_root = Path(tmp) / "wiki"
+            wiki_root.mkdir()
+            transcript = YoutubeTranscriptResult(
+                video_id="abcdefghijk",
+                canonical_url="https://www.youtube.com/watch?v=abcdefghijk",
+                provider="fixture",
+                language="en",
+                caption_kind="manual",
+                title="Provider Title",
+                segments=[TranscriptSegment("direct transcript", 0, 2)],
+            )
+
+            with mock.patch("sys.argv", [
+                "ingest_source.py",
+                "--wiki-root", str(wiki_root),
+                "--url", "https://youtube.com/watch?list=x&v=abcdefghijk",
+                "--title", "Explicit Title",
+                "--category", "video-analysis",
+            ]):
+                with mock.patch("ingest_source.fetch_url", side_effect=AssertionError("HTML fetch must not run")):
+                    with mock.patch("ingest_source.fetch_url_browser", side_effect=AssertionError("browser fetch must not run")):
+                        with mock.patch("ingest_source.fetch_youtube_transcript", return_value=transcript):
+                            with mock.patch("ingest_source.extract_entities_concepts", return_value=[]):
+                                with mock.patch("ingest_source.regen_index", return_value=None):
+                                    with mock.patch("ingest_source._append_wiki_log", None):
+                                        main()
+
+            source = next((wiki_root / "raw" / "video-analysis").glob("*-explicit-title.md"))
+            saved = source.read_text(encoding="utf-8")
+            self.assertIn('source_url: "https://www.youtube.com/watch?v=abcdefghijk"', saved)
+            self.assertIn("[00:00] direct transcript", saved)
+
+    def test_direct_youtube_without_transcript_fails_before_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wiki_root = Path(tmp) / "wiki"
+            wiki_root.mkdir()
+
+            with mock.patch("sys.argv", [
+                "ingest_source.py",
+                "--wiki-root", str(wiki_root),
+                "--url", "https://www.youtube.com/watch?v=abcdefghijk",
+                "--category", "video-analysis",
+            ]):
+                with mock.patch("ingest_source.fetch_url", side_effect=AssertionError("HTML fetch must not run")):
+                    with mock.patch("ingest_source.fetch_youtube_transcript", return_value=None):
+                        with self.assertRaises(SystemExit) as cm:
+                            main()
+
+            self.assertNotEqual(cm.exception.code, 0)
+            self.assertFalse((wiki_root / "raw" / "video-analysis").exists())
+
+    def test_youtube_embed_appends_shared_timestamped_renderer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wiki_root = Path(tmp) / "wiki"
+            wiki_root.mkdir()
+            transcript = YoutubeTranscriptResult(
+                video_id="abcdefghijk",
+                canonical_url="https://www.youtube.com/watch?v=abcdefghijk",
+                provider="fixture",
+                language="en",
+                caption_kind="manual",
+                segments=[TranscriptSegment("embedded transcript", 4, 2)],
+            )
+
+            with mock.patch("sys.argv", [
+                "ingest_source.py",
+                "--wiki-root", str(wiki_root),
+                "--url", "https://example.com/post",
+                "--category", "ai",
+                "--transcribe-embeds",
+            ]):
+                with mock.patch(
+                    "ingest_source.fetch_url",
+                    return_value=("Post", "body", ["https://www.youtube.com/watch?v=abcdefghijk"]),
+                ):
+                    with mock.patch("ingest_source.fetch_youtube_transcript", return_value=transcript):
+                        with mock.patch("ingest_source.extract_entities_concepts", return_value=[]):
+                            with mock.patch("ingest_source.regen_index", return_value=None):
+                                with mock.patch("ingest_source._append_wiki_log", None):
+                                    main()
+
+            source = next((wiki_root / "raw" / "ai").glob("*-post.md"))
+            self.assertIn("[00:04] embedded transcript", source.read_text(encoding="utf-8"))
 
 
 class IngestClaimIntegrationTests(unittest.TestCase):

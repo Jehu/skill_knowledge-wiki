@@ -401,7 +401,7 @@ def build_evidence_locator(
     if start == -1:
         raise ValueError("excerpt is not present in source")
     rel = source.resolve().relative_to(root.resolve()).as_posix()
-    return {
+    locator = {
         "source_path": rel,
         "source_sha256": _sha256_file(source),
         "excerpt": excerpt,
@@ -410,6 +410,39 @@ def build_evidence_locator(
         "extractor_version": extractor_version,
         "source_tier": source_tier,
     }
+    media_time_range = _media_time_range_for_char_range(text, start, start + len(excerpt))
+    if media_time_range is not None:
+        locator["media_time_range"] = media_time_range
+    return locator
+
+
+_TIMESTAMP_MARKER_RE = re.compile(r"\[(\d{2}:\d{2}(?::\d{2})?)\]")
+
+
+def _parse_media_timestamp(value: str) -> float:
+    parts = [int(part) for part in value.split(":")]
+    if len(parts) == 2:
+        minutes, seconds = parts
+        return float(minutes * 60 + seconds)
+    hours, minutes, seconds = parts
+    return float(hours * 3600 + minutes * 60 + seconds)
+
+
+def _media_time_range_for_char_range(text: str, start: int, end: int) -> Optional[List[float]]:
+    markers = [
+        (match.start(), match.end(), _parse_media_timestamp(match.group(1)))
+        for match in _TIMESTAMP_MARKER_RE.finditer(text)
+    ]
+    if not markers:
+        return None
+
+    prior = [marker for marker in markers if marker[1] <= start]
+    if not prior:
+        return None
+    start_time = prior[-1][2]
+    following = [marker for marker in markers if marker[0] >= end]
+    end_time = following[0][2] if following else start_time
+    return [start_time, end_time]
 
 
 def empty_claim_sidecar(page_kind: str, slug: str) -> Dict[str, Any]:
@@ -519,12 +552,25 @@ def validate_claim_sidecar(wiki_root: Union[str, Path], page_kind: str, slug: st
             excerpt = text[start:end]
             if _sha256_text(excerpt) != locator.get("excerpt_sha256"):
                 claim_errors.append(f"excerpt hash mismatch: {locator.get('source_path')}")
+            if "media_time_range" in locator and not _valid_media_time_range(locator["media_time_range"]):
+                claim_errors.append("invalid media_time_range")
         item = {"claim_id": claim.get("id"), "errors": claim_errors}
         if claim_errors:
             report["invalid"].append(item)
         else:
             report["valid"].append(item)
     return report
+
+
+def _valid_media_time_range(value: Any) -> bool:
+    if not isinstance(value, list) or len(value) != 2:
+        return False
+    start, end = value
+    if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+        return False
+    if start < 0 or end < 0:
+        return False
+    return start <= end
 
 
 def claim_source_refs(wiki_root: Union[str, Path], page_kind: str, slug: str) -> List[str]:

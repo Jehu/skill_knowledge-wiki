@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from auto_ingest import _fetch_video_transcript, _yt_transcript_api_fallback
 import auto_ingest
+from youtube_transcripts import TranscriptSegment, YoutubeTranscriptResult
 
 
 class TranscriptFallbackTests(unittest.TestCase):
@@ -41,6 +42,44 @@ class TranscriptFallbackTests(unittest.TestCase):
 
         self.assertEqual(transcript, "")
         self.assertIn("Kein Transkript verfügbar", "\n".join(logs.output))
+
+
+class YoutubePlaylistIngestTests(unittest.TestCase):
+    def test_playlist_uses_timestamped_result_and_canonical_url(self):
+        result = YoutubeTranscriptResult(
+            video_id="abcdefghijk",
+            canonical_url="https://www.youtube.com/watch?v=abcdefghijk",
+            provider="fixture",
+            language="en",
+            caption_kind="manual",
+            title="Provider Title",
+            segments=[TranscriptSegment("playlist transcript", 0, 2)],
+        )
+
+        def fake_run(cmd, **_kwargs):
+            if cmd[:2] == ["yt-dlp", "--flat-playlist"]:
+                return types.SimpleNamespace(returncode=0, stdout="abcdefghijk\tPlaylist Title\n", stderr="")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        stats = {"new": 0, "skipped": 0, "errors": 0}
+        config = {"youtube_playlists": [{"playlist_id": "PL123"}]}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "state.sqlite"
+            auto_ingest.init_db(db_path)
+            with mock.patch("auto_ingest.subprocess.run", side_effect=fake_run):
+                with mock.patch("auto_ingest.fetch_youtube_transcript", return_value=result):
+                    with mock.patch("auto_ingest.run_ingest", return_value=True) as run_ingest:
+                        with mock.patch("auto_ingest.time.sleep"):
+                            auto_ingest.process_youtube(config, db_path, stats)
+
+        run_ingest.assert_called_once_with(
+            "https://www.youtube.com/watch?v=abcdefghijk",
+            category="video-analysis",
+            transcript="[00:00] playlist transcript",
+            title_override="Playlist Title",
+        )
+        self.assertEqual(stats["new"], 1)
 
 
 class EmailImageCleanupTests(unittest.TestCase):

@@ -35,6 +35,8 @@ try:
 except ImportError:
     _fetch_video_transcript = None
 
+from youtube_transcripts import fetch_youtube_transcript, parse_youtube_identity
+
 # ---------------------------------------------------------------------------
 # Import shared utilities from wiki_core
 # ---------------------------------------------------------------------------
@@ -1257,18 +1259,34 @@ def main():
         content = args.text
         source_url = args.url
     elif args.url:
-        if args.use_browser:
+        youtube_identity = parse_youtube_identity(args.url)
+        if youtube_identity:
+            transcript_result = fetch_youtube_transcript(args.url)
+            if not transcript_result:
+                logging.error("Kein YouTube-Transkript verfügbar: %s", args.url)
+                sys.exit(1)
+            title = args.title or transcript_result.title or f"YouTube {youtube_identity.video_id}"
+            content = transcript_result.to_markdown()
+            source_url = transcript_result.canonical_url
+            embeds = []
+        elif args.use_browser:
             title, content, embeds = fetch_url_browser(args.url)
         else:
             title, content, embeds = fetch_url(args.url)
-        source_url = args.url
+        if not youtube_identity:
+            source_url = args.url
         if args.transcribe_embeds and embeds:
             if _fetch_video_transcript is None:
                 logging.warning("--transcribe-embeds: _fetch_video_transcript nicht verfügbar (auto_ingest.py?)")
             else:
                 for vid_url in embeds:
                     logging.info("Transkribiere eingebettetes Video: %s", vid_url)
-                    transcript = _fetch_video_transcript(vid_url)
+                    embedded_identity = parse_youtube_identity(vid_url)
+                    if embedded_identity:
+                        transcript_result = fetch_youtube_transcript(vid_url)
+                        transcript = transcript_result.to_markdown() if transcript_result else ""
+                    else:
+                        transcript = _fetch_video_transcript(vid_url)
                     if transcript:
                         content += f"\n\n## Transkript: Eingebettetes Video\n\n{transcript}\n"
                         logging.info("Transkript angehängt (%d Zeichen)", len(transcript))

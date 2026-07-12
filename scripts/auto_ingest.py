@@ -36,6 +36,7 @@ import requests
 import yaml
 
 from wiki_core import resolve_wiki_root
+from youtube_transcripts import canonical_youtube_url, fetch_youtube_transcript, parse_youtube_identity
 
 # Relevance-Check (zweistufig)
 try:
@@ -115,17 +116,7 @@ def init_db(db_path: Path) -> None:
 
 def _normalize_youtube_url(url: str) -> str:
     """Normalisiert YouTube-URLs auf ein einheitliches Format."""
-    import re
-    # Extrahiere Video-ID aus verschiedenen Formaten
-    patterns = [
-        r'(?:youtube\.com/watch\?v=|youtu\.be/)([A-Za-z0-9_-]{11})',
-        r'youtube\.com/embed/([A-Za-z0-9_-]{11})',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return f"https://youtu.be/{match.group(1)}"
-    return url
+    return canonical_youtube_url(url)
 
 
 def is_processed(db_path: Path, url: str, title: str) -> bool:
@@ -320,6 +311,13 @@ def _fetch_video_transcript(video_url: str, timeout: int = 30) -> str:
     if re.match(r'https?://(www\.)?(twitter|x)\.com/\w+/status/\d+', video_url):
         return _ytdlp_transcript(video_url, timeout)
 
+    if parse_youtube_identity(video_url):
+        result = fetch_youtube_transcript(video_url, timeout=timeout)
+        if result:
+            return result.to_plain_text()
+        logging.warning("Kein Transkript verfügbar für: %s", video_url)
+        return ""
+
     # --- YouTube (und alle anderen yt-dlp-fähigen Sites): yt-dlp zuerst ---
     transcript = _ytdlp_transcript(video_url, timeout)
     if transcript:
@@ -409,29 +407,24 @@ def _yt_transcript_api_fallback(video_url: str, timeout: int = 30) -> str:
     """
     try:
         from youtube_transcript_api import YouTubeTranscriptApi  # type: ignore
-        video_id = _extract_video_id(video_url)
-        if video_id:
-            api = YouTubeTranscriptApi()
-            for lang in ["en", "de"]:
-                try:
-                    transcript_snippets = api.fetch(video_id, languages=[lang])
-                    transcript = "\n".join([s.text for s in transcript_snippets])
-                    if transcript.strip():
-                        logging.info("Transkript via youtube-transcript-api geladen (%s): %d Zeichen", lang, len(transcript))
-                        return transcript
-                except Exception as exc:
-                    logging.warning(
-                        "youtube-transcript-api provider failed (%s) for %s: %s",
-                        lang,
-                        video_id,
-                        exc,
-                    )
-                    continue
+        result = fetch_youtube_transcript(
+            video_url,
+            preferred_languages=("en", "de"),
+            timeout=timeout,
+            runner=_missing_ytdlp_runner,
+            api_factory=YouTubeTranscriptApi,
+        )
+        if result:
+            return result.to_plain_text()
     except ImportError:
         logging.debug("youtube-transcript-api nicht installiert")
     except Exception as exc:
         logging.debug("youtube-transcript-api Fehler: %s — %s", video_url, exc)
     return ""
+
+
+def _missing_ytdlp_runner(*_args: Any, **_kwargs: Any) -> object:
+    raise FileNotFoundError("yt-dlp disabled for API-only fallback")
 
 
 # Alias für Abwärtskompatibilität
@@ -440,15 +433,8 @@ _fetch_youtube_transcript = _fetch_video_transcript
 
 def _extract_video_id(url: str) -> Optional[str]:
     """Extrahiert YouTube Video ID aus URL."""
-    patterns = [
-        r'(?:youtube\.com/watch\?v=|youtu\.be/)([A-Za-z0-9_-]{11})',
-        r'youtube\.com/embed/([A-Za-z0-9_-]{11})',
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, url)
-        if m:
-            return m.group(1)
-    return None
+    identity = parse_youtube_identity(url)
+    return identity.video_id if identity else None
 
 
 def _should_skip_by_relevance(
@@ -742,19 +728,26 @@ def process_youtube(config: Dict[str, Any], db_path: Path, stats: Dict[str, int]
                 continue
 
             # --- Transkript holen (mit Retry bei Rate-Limiting) ---
-            yt_transcript = _fetch_video_transcript(video_url)
-            if not yt_transcript:
+            transcript_result = fetch_youtube_transcript(video_url)
+            if not transcript_result:
                 logging.info("YouTube: Erster Transkript-Versuch leer fuer %s, retry in 10s", title)
                 time.sleep(10)
-                yt_transcript = _fetch_video_transcript(video_url)
+                transcript_result = fetch_youtube_transcript(video_url)
 
             # --- Fallback: YouTube-Beschreibung wenn kein Transkript ---
             # WICHTIG: YouTube-URLs dürfen nie direkt an ingest_source.py --url
             # übergeben werden, da YouTube Bot-Detection (429) auslöst.
             # Daher muss IMMER ein --file mitgeliefert werden.
-            if not yt_transcript:
+            if transcript_result:
+                yt_transcript = transcript_result.to_markdown()
+                video_url = transcript_result.canonical_url
+            else:
                 logging.warning("YouTube: Kein Transkript fuer %s nach Retry, verwende Beschreibung als Fallback", title)
-                yt_transcript = _fetch_youtube_description(video_url) or f"*Kein Transkript verfügbar. Original: {video_url}*"
+                description = _fetch_youtube_description(video_url)
+                if description:
+                    yt_transcript = f"*Kein Transkript verfügbar; YouTube-Beschreibung als Fallback.*\n\n{description}"
+                else:
+                    yt_transcript = f"*Kein Transkript verfügbar. Original: {video_url}*"
 
             # --- Ingest mit Transkript (immer als --file, nie URL-fetch) ---
             success = run_ingest(video_url, category="video-analysis", transcript=yt_transcript, title_override=title)
