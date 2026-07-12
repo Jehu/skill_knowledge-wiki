@@ -728,19 +728,26 @@ def process_youtube(config: Dict[str, Any], db_path: Path, stats: Dict[str, int]
                 continue
 
             # --- Transkript holen (mit Retry bei Rate-Limiting) ---
-            yt_transcript = _fetch_video_transcript(video_url)
-            if not yt_transcript:
+            transcript_result = fetch_youtube_transcript(video_url)
+            if not transcript_result:
                 logging.info("YouTube: Erster Transkript-Versuch leer fuer %s, retry in 10s", title)
                 time.sleep(10)
-                yt_transcript = _fetch_video_transcript(video_url)
+                transcript_result = fetch_youtube_transcript(video_url)
 
             # --- Fallback: YouTube-Beschreibung wenn kein Transkript ---
             # WICHTIG: YouTube-URLs dürfen nie direkt an ingest_source.py --url
             # übergeben werden, da YouTube Bot-Detection (429) auslöst.
             # Daher muss IMMER ein --file mitgeliefert werden.
-            if not yt_transcript:
+            if transcript_result:
+                yt_transcript = transcript_result.to_markdown()
+                video_url = transcript_result.canonical_url
+            else:
                 logging.warning("YouTube: Kein Transkript fuer %s nach Retry, verwende Beschreibung als Fallback", title)
-                yt_transcript = _fetch_youtube_description(video_url) or f"*Kein Transkript verfügbar. Original: {video_url}*"
+                description = _fetch_youtube_description(video_url)
+                if description:
+                    yt_transcript = f"*Kein Transkript verfügbar; YouTube-Beschreibung als Fallback.*\n\n{description}"
+                else:
+                    yt_transcript = f"*Kein Transkript verfügbar. Original: {video_url}*"
 
             # --- Ingest mit Transkript (immer als --file, nie URL-fetch) ---
             success = run_ingest(video_url, category="video-analysis", transcript=yt_transcript, title_override=title)
