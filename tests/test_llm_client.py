@@ -146,17 +146,18 @@ class LLMClientTests(unittest.TestCase):
 
     def test_missing_openrouter_key_prevents_http(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch("llm_client.requests.post") as post:
-                with self.assertRaisesRegex(LLMClientError, "OPENROUTER_API_KEY"):
-                    generate_text(
-                        "Prompt",
-                        {
-                            "provider": "openrouter",
-                            "model": "openai/gpt-4.1-mini",
-                            "base_url": "https://openrouter.ai/api/v1",
-                            "api_key_env": "OPENROUTER_API_KEY",
-                        },
-                    )
+            with mock.patch("llm_client.load_dotenv", return_value=False):
+                with mock.patch("llm_client.requests.post") as post:
+                    with self.assertRaisesRegex(LLMClientError, "OPENROUTER_API_KEY"):
+                        generate_text(
+                            "Prompt",
+                            {
+                                "provider": "openrouter",
+                                "model": "openai/gpt-4.1-mini",
+                                "base_url": "https://openrouter.ai/api/v1",
+                                "api_key_env": "OPENROUTER_API_KEY",
+                            },
+                        )
 
         post.assert_not_called()
 

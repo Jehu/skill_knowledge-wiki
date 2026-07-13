@@ -77,7 +77,11 @@ class WikiQueryLLMTests(unittest.TestCase):
 
         resolve.assert_called_once_with(mock.ANY, profile="query")
         generate.assert_called_once()
-        self.assertIn("Was ist Agent Memory?", generate.call_args.args[0])
+        prompt = generate.call_args.args[0]
+        self.assertIn("Was ist Agent Memory?", prompt)
+        self.assertIn("ausschließlich die bereitgestellten Wiki-Einträge als Primärbasis", prompt)
+        self.assertIn("Füge kein externes Fachwissen", prompt)
+        self.assertIn("Jede konkrete, nicht-triviale Behauptung", prompt)
         self.assertEqual(generate.call_args.args[1]["model"], "query-model")
         self.assertEqual(generate.call_args.kwargs["temperature"], mock.ANY)
         self.assertIn("Antwort", answer)
