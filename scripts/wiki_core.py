@@ -172,6 +172,32 @@ def load_wiki_config(config_path: Optional[Union[str, Path]] = None) -> Dict[str
         return data
 
 
+def load_dotenv(
+    dotenv_path: Optional[Union[str, Path]] = None,
+    *,
+    env: Optional[Dict[str, str]] = None,
+) -> bool:
+    """Load KEY=VALUE pairs from .env without overriding existing env values."""
+    env_map = os.environ if env is None else env
+    env_file = Path(dotenv_path) if dotenv_path else Path(__file__).resolve().parent.parent / ".env"
+    if not env_file.exists():
+        return False
+
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in env_map:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        env_map[key] = value
+    return True
+
+
 def _positive_number(value: Any, name: str) -> Any:
     try:
         numeric = float(value)

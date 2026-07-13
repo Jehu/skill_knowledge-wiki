@@ -8,6 +8,8 @@ from typing import Any, Dict, Mapping, Optional
 
 import requests
 
+from wiki_core import load_dotenv
+
 
 @dataclass(frozen=True)
 class LLMResult:
@@ -123,6 +125,7 @@ def _generate_openrouter(
     provider = "openrouter"
     model = str(cfg.get("model", "")).strip()
     api_key_env = str(cfg.get("api_key_env", "OPENROUTER_API_KEY")).strip()
+    load_dotenv()
     api_key = os.environ.get(api_key_env, "")
     if not api_key:
         raise _safe_error(provider, model, f"missing API key environment variable {api_key_env}")

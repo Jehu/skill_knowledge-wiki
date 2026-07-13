@@ -6,7 +6,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from wiki_core import load_wiki_config, resolve_llm_config, resolve_wiki_root
+from wiki_core import load_dotenv, load_wiki_config, resolve_llm_config, resolve_wiki_root
 import retrofit_provenance
 from retrofit_provenance import resolve_retrofit_wiki_root
 
@@ -232,6 +232,28 @@ class WikiRootResolutionTests(unittest.TestCase):
                 offenders.append(path.name)
 
         self.assertEqual(offenders, [])
+
+    def test_load_dotenv_adds_values_without_overriding_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text(
+                "\n".join([
+                    "OPENROUTER_API_KEY=from-dotenv",
+                    "EXISTING_KEY=from-dotenv",
+                    "# comment",
+                    "QUOTED_VALUE=\"quoted text\"",
+                    "IGNORED_LINE",
+                ]),
+                encoding="utf-8",
+            )
+            env = {"EXISTING_KEY": "from-env"}
+
+            loaded = load_dotenv(env_file, env=env)
+
+        self.assertTrue(loaded)
+        self.assertEqual(env["OPENROUTER_API_KEY"], "from-dotenv")
+        self.assertEqual(env["EXISTING_KEY"], "from-env")
+        self.assertEqual(env["QUOTED_VALUE"], "quoted text")
 
     def test_retrofit_provenance_uses_environment_wiki_root(self):
         with tempfile.TemporaryDirectory() as tmp:

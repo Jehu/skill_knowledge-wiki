@@ -90,8 +90,8 @@ class WikiWriteCoordinatorTests(unittest.TestCase):
             ("scripts/auto_ingest.py", 1319),  # process lock pid file
             ("scripts/wiki_log.py", 52),  # operational log rewrite
             ("scripts/wiki_log.py", 57),  # operational log rewrite
-            ("scripts/wiki_core.py", 352),  # staged writer helper
-            ("scripts/wiki_core.py", 443),  # coordinator callback
+            ("scripts/wiki_core.py", 378),  # staged writer helper
+            ("scripts/wiki_core.py", 469),  # coordinator callback
         }
         pattern = re.compile(r"\.write_text\(|with open\([^)]*, \"w|open\([^)]*, 'w|\.write_bytes\(")
         found = set()

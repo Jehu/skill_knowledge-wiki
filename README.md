@@ -99,6 +99,15 @@ or your job runner. Do not store API keys in `config.yaml`. OpenRouter is never
 used as a fallback for a failed local Ollama call; switching a workflow remote is
 an explicit per-profile privacy decision.
 
+For local development, you may also put the key into a repo-local `.env` file:
+
+```env
+OPENROUTER_API_KEY=...
+```
+
+The scripts load `.env` automatically without overriding variables already set
+in the process environment.
+
 ## Usage
 
 ### Query — Ask questions

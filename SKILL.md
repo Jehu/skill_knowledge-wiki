@@ -68,7 +68,8 @@ Resolve the wiki root as CLI `--wiki-root`, then `WIKI_ROOT`, then
 optional `llm_profiles:` entries can override `query`, `ingest`, `relevance`,
 `categorize`, or `retrofit` independently. Keep remote providers opt-in; use
 `api_key_env: OPENROUTER_API_KEY` or another environment-variable name, never a
-literal key in config or docs.
+literal key in config or docs. Local `.env` files are loaded automatically for
+secrets, but existing process environment variables take precedence.
 
 ## Operational Notes
 
