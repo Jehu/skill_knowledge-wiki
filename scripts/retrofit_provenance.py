@@ -16,8 +16,6 @@ import json
 import shutil
 import sys
 import time
-import urllib.request
-import urllib.error
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -27,15 +25,14 @@ SCRIPT_DIR = Path(__file__).parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from wiki_core import coordinated_write_text, resolve_wiki_root
+from llm_client import LLMClientError, generate_text
+from wiki_core import coordinated_write_text, resolve_llm_config, resolve_wiki_root
 from wiki_lint import parse_frontmatter
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 DEFAULT_WIKI_ROOT = resolve_wiki_root()
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "gemma4:e4b"
 OLLAMA_TEMPERATURE = 0.1
 OLLAMA_NUM_PREDICT = 512
 
@@ -75,29 +72,18 @@ def collect_wiki_pages(wiki_root: Path) -> list:
 # Ollama API call
 # ---------------------------------------------------------------------------
 def call_ollama(prompt: str, verbose: bool = False) -> str:
-    """Send prompt to Ollama generate endpoint, return full response text."""
-    payload = json.dumps({
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "temperature": OLLAMA_TEMPERATURE,
-        "num_predict": OLLAMA_NUM_PREDICT,
-        "stream": False,
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        OLLAMA_URL,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    """Send prompt to the configured retrofit LLM and return full response text."""
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data.get("response", "")
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Ollama nicht erreichbar: {exc}") from exc
-    except Exception as exc:
-        raise RuntimeError(f"Ollama Fehler: {exc}") from exc
+        llm_cfg = resolve_llm_config(profile="retrofit")
+        result = generate_text(
+            prompt,
+            llm_cfg,
+            temperature=OLLAMA_TEMPERATURE,
+            num_predict=OLLAMA_NUM_PREDICT,
+        )
+        return result.text
+    except LLMClientError as exc:
+        raise RuntimeError(f"LLM Fehler: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------

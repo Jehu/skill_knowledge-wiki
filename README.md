@@ -54,12 +54,22 @@ Everything lives in `config.yaml`:
 
 ```yaml
 llm:
-  model: gemma4:e4b          # Ollama model for answer generation
+  model: gemma4:e4b          # Local Ollama default used by all workflows
   host: http://localhost:11434
   temperature: 0.3
   num_predict: 8192
   num_ctx: 65536             # Context window (tokens)
   timeout: 180
+
+# Optional per-workflow profiles. Omitted profiles inherit llm:.
+# Remote providers are opt-in and never used as automatic fallback.
+llm_profiles:
+  query:
+    provider: openrouter
+    model: openai/gpt-4.1-mini
+    api_key_env: OPENROUTER_API_KEY
+  ingest:
+    temperature: 0.1
 
 embeddings:
   model: all-MiniLM-L6-v2    # Sentence transformer for semantic search
@@ -69,6 +79,25 @@ wiki_root: "~/knowledge"     # Path to your wiki (env WIKI_ROOT > config > defau
 ```
 
 **Priority for wiki root:** explicit `--wiki-root` CLI argument > `WIKI_ROOT` env var > `config.yaml wiki_root` > `~/knowledge`
+
+**LLM profiles:** `llm:` is the backward-compatible default and resolves to
+Ollama when `provider` is omitted. Optional `llm_profiles:` entries can override
+`query`, `ingest`, `relevance`, `categorize`, or `retrofit` independently. A
+profile that switches provider must set its own `model`; Ollama endpoint fields
+do not carry into OpenRouter profiles.
+
+**OpenRouter:** set `api_key_env: OPENROUTER_API_KEY` in the selected profile
+and provide the key through the process environment, for example:
+
+```bash
+export OPENROUTER_API_KEY="..."
+python3 scripts/wiki_query.py --question "What do I know about agent memory?"
+```
+
+On a VPS, inject the same environment variable through systemd, launch tooling,
+or your job runner. Do not store API keys in `config.yaml`. OpenRouter is never
+used as a fallback for a failed local Ollama call; switching a workflow remote is
+an explicit per-profile privacy decision.
 
 ## Usage
 
@@ -357,7 +386,7 @@ agentskills.io-compatible agent:
 git clone <repo> ~/.hermes/skills/knowledge-wiki
 cd ~/.hermes/skills/knowledge-wiki
 pip install -r requirements.txt
-# edit config.yaml → set wiki_root + optionally change Ollama model
+# edit config.yaml → set wiki_root + optionally change local or per-workflow LLM profiles
 python3 scripts/wiki_graph_builder.py --force
 python3 scripts/wiki_query.py --question "Hello world"
 ```
@@ -385,8 +414,13 @@ for the relevance filtering feature.
 | Too many direct matches (noise) | The keyword matcher only checks titles, not full paths |
 | Broken citation links in synthesis | Post-processing order: bare-filename → path → link conversion |
 | Ollama timeout / truncation | Increase `num_ctx` or `timeout` in `config.yaml` |
+| OpenRouter reports missing key | Export the environment variable named by `api_key_env` |
 | Synthesis overwrites same-day query | Same question on same day → same filename. Use different phrasings |
 | `config/feeds.yaml` not found | Copy/rename `config/feeds.example.yaml` → `config/feeds.yaml` and configure your sources |
+
+Standalone scripts cannot automatically call the model of the agent invoking
+this skill. They run as Python processes and only know the configured provider
+boundary in `scripts/llm_client.py`.
 
 ## License
 

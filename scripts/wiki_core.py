@@ -172,17 +172,113 @@ def load_wiki_config(config_path: Optional[Union[str, Path]] = None) -> Dict[str
         return data
 
 
-def resolve_llm_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Return normalized model/provider settings with Ollama-compatible defaults."""
-    llm = (config or load_wiki_config()).get("llm", {})
-    return {
-        "model": llm.get("model", "gemma4:e4b"),
-        "host": str(llm.get("host", "http://localhost:11434")).rstrip("/"),
-        "temperature": llm.get("temperature", 0.3),
-        "num_predict": llm.get("num_predict", 8192),
-        "num_ctx": llm.get("num_ctx", 65536),
-        "timeout": llm.get("timeout", 180),
+def _positive_number(value: Any, name: str) -> Any:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be positive") from exc
+    if numeric <= 0:
+        raise ValueError(f"{name} must be positive")
+    return value
+
+
+def _normalize_llm_provider(provider: Any) -> str:
+    normalized = str(provider or "ollama").strip().lower()
+    if normalized not in {"ollama", "openrouter"}:
+        raise ValueError(f"Unsupported LLM provider: {provider}")
+    return normalized
+
+
+def _normalize_endpoint(value: Any) -> str:
+    return str(value).strip().rstrip("/")
+
+
+def _validate_llm_profile_shape(name: str, value: Any) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"llm_profiles.{name} must be a mapping")
+    return value
+
+
+def resolve_llm_config(
+    config: Optional[Dict[str, Any]] = None,
+    *,
+    profile: Optional[str] = None,
+    overrides: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Return normalized provider settings with Ollama-compatible defaults."""
+    full_config = load_wiki_config() if config is None else config
+    base_llm = full_config.get("llm", {}) or {}
+    if not isinstance(base_llm, dict):
+        raise ValueError("llm must be a mapping")
+
+    base_provider = _normalize_llm_provider(base_llm.get("provider", "ollama"))
+    profile_values: Dict[str, Any] = {}
+    if profile:
+        profiles = full_config.get("llm_profiles", {}) or {}
+        if not isinstance(profiles, dict):
+            raise ValueError("llm_profiles must be a mapping")
+        profile_values = _validate_llm_profile_shape(profile, profiles.get(profile))
+
+    profile_declares_provider = "provider" in profile_values
+    selected_provider = _normalize_llm_provider(profile_values.get("provider", base_provider))
+    provider_changed = bool(profile and profile_declares_provider and selected_provider != base_provider)
+    runtime = dict(overrides or {})
+
+    if selected_provider == "openrouter" and "host" in profile_values:
+        raise ValueError("OpenRouter profiles must use base_url, not host")
+
+    if selected_provider == "ollama" and "base_url" in profile_values and "host" not in profile_values:
+        raise ValueError("Ollama profiles must use host, not base_url")
+
+    inherited_base = {
+        key: value
+        for key, value in base_llm.items()
+        if not (provider_changed and key in {"host", "base_url", "api_key_env"})
     }
+    if provider_changed and "model" not in profile_values:
+        raise ValueError(f"llm_profiles.{profile} changes provider and must declare its own model")
+
+    merged: Dict[str, Any] = {
+        "provider": selected_provider,
+        "model": "gemma4:e4b",
+        "temperature": 0.3,
+        "num_predict": 8192,
+        "num_ctx": 65536,
+        "timeout": 180,
+    }
+    merged.update(inherited_base)
+    merged.update(profile_values)
+    merged.update(runtime)
+    merged["provider"] = _normalize_llm_provider(merged.get("provider", selected_provider))
+
+    model = str(merged.get("model", "")).strip()
+    if not model:
+        raise ValueError("model is required")
+    merged["model"] = model
+
+    merged["timeout"] = _positive_number(merged.get("timeout", 180), "timeout")
+
+    provider = merged["provider"]
+    if provider == "ollama":
+        host = _normalize_endpoint(merged.get("host", merged.get("base_url", "http://localhost:11434")))
+        if not host:
+            raise ValueError("Ollama host is required")
+        merged["host"] = host
+        merged["base_url"] = host
+        merged.pop("api_key_env", None)
+    elif provider == "openrouter":
+        base_url = _normalize_endpoint(merged.get("base_url", "https://openrouter.ai/api/v1"))
+        if not base_url:
+            raise ValueError("OpenRouter base_url is required")
+        merged["base_url"] = base_url
+        merged.pop("host", None)
+        merged["api_key_env"] = str(merged.get("api_key_env", "OPENROUTER_API_KEY")).strip()
+        if not merged["api_key_env"]:
+            raise ValueError("OpenRouter api_key_env is required")
+
+    return merged
 
 
 def resolve_wiki_root(

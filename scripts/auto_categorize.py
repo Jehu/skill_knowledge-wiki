@@ -21,7 +21,8 @@ from typing import List, Optional, Tuple
 
 import requests
 
-from wiki_core import coordinated_write_text
+from llm_client import LLMClientError, generate_text
+from wiki_core import coordinated_write_text, resolve_llm_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -187,6 +188,15 @@ def _build_source_context(source: Optional[str]) -> str:
     return ""
 
 
+def _runtime_llm_overrides(model: str, ollama_url: str) -> dict:
+    overrides = {}
+    if model != DEFAULT_MODEL:
+        overrides["model"] = model
+    if ollama_url != DEFAULT_OLLAMA_URL:
+        overrides["host"] = ollama_url
+    return overrides
+
+
 # ---------------------------------------------------------------------------
 # Core categorize() – public API (backward compatible)
 # ---------------------------------------------------------------------------
@@ -197,13 +207,18 @@ def categorize(
     ollama_url: str = DEFAULT_OLLAMA_URL,
     source: Optional[str] = None,
 ) -> str:
-    """Sende Titel + Content an Ollama und erhalte Kategorie.
+    """Sende Titel + Content an den konfigurierten LLM und erhalte Kategorie.
 
     Wird von ingest_source.py importiert.  Die Signatur ist abwärtskompatibel
     (``source`` ist ein neues Keyword-Only-Argument mit Default None).
     """
-    # Stelle sicher dass Ollama erreichbar ist
-    if not ensure_ollama_running(ollama_url=ollama_url):
+    llm_cfg = resolve_llm_config(
+        profile="categorize",
+        overrides=_runtime_llm_overrides(model, ollama_url),
+    )
+
+    # Stelle nur fuer lokale Profile sicher, dass Ollama erreichbar ist.
+    if llm_cfg.get("provider") == "ollama" and not ensure_ollama_running(ollama_url=llm_cfg.get("host", ollama_url)):
         logging.warning("Ollama konnte nicht gestartet werden, fallback zu 'general'")
         return "general"
 
@@ -216,25 +231,9 @@ def categorize(
         content=content[:2000],
     )
 
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.0,
-            "num_predict": 20,
-        },
-    }
-
     try:
-        resp = requests.post(
-            f"{ollama_url}/api/generate",
-            json=payload,
-            timeout=90,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        raw = data.get("response", "").strip().lower()
+        result = generate_text(prompt, llm_cfg, temperature=0.0, num_predict=20)
+        raw = result.text.strip().lower()
 
         # Extrahiere Kategorie aus Antwort
         for cat in CATEGORIES:
@@ -245,14 +244,8 @@ def categorize(
         logging.warning("Unbekannte Antwort: '%s', fallback zu 'general'", raw)
         return "general"
 
-    except requests.ConnectionError:
-        logging.error("Ollama nicht erreichbar unter %s", ollama_url)
-        return "general"
-    except requests.Timeout:
-        logging.error("Ollama Timeout")
-        return "general"
-    except Exception as exc:
-        logging.error("Ollama Fehler: %s", exc)
+    except LLMClientError as exc:
+        logging.error("LLM Fehler: %s", exc)
         return "general"
 
 
@@ -510,8 +503,12 @@ def main():
         logging.info("Batch: %d Dateien, Modell: %s, dry_run=%s, force=%s",
                       total, args.model, args.dry_run, args.force)
 
-        # Ollama einmal starten
-        if not ensure_ollama_running(ollama_url=args.ollama_url):
+        # Ollama nur fuer lokale Profile einmal starten.
+        batch_llm_cfg = resolve_llm_config(
+            profile="categorize",
+            overrides=_runtime_llm_overrides(args.model, args.ollama_url),
+        )
+        if batch_llm_cfg.get("provider") == "ollama" and not ensure_ollama_running(ollama_url=batch_llm_cfg.get("host", args.ollama_url)):
             logging.error("Ollama nicht erreichbar, Batch abgebrochen")
             sys.exit(1)
 

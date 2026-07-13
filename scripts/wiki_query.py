@@ -16,8 +16,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import requests
-
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -68,7 +66,13 @@ except ImportError as exc:
     sys.exit(1)
 
 DEFAULT_WIKI_ROOT = resolve_wiki_root()
-LLM_CFG = resolve_llm_config(load_wiki_config(CONFIG_PATH))
+BASE_CFG = load_wiki_config(CONFIG_PATH)
+
+try:
+    from llm_client import LLMClientError, generate_text
+except ImportError as exc:
+    logging.error("Konnte llm_client.py nicht importieren: %s", exc)
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -514,25 +518,16 @@ def generate_answer(question: str, context_files: List[dict]) -> Tuple[str, int,
         prompt = prompt[:100000] + "\n\n[... Kontext gekürzt ...]"
     
     try:
-        ollama_host = LLM_CFG.get("host", "http://localhost:11434").rstrip("/")
-        resp = requests.post(
-            f"{ollama_host}/api/generate",
-            json={
-                "model": LLM_CFG.get("model", "gemma4:e4b"),
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": LLM_CFG.get("temperature", 0.3),
-                    "num_predict": LLM_CFG.get("num_predict", 8192),
-                    "num_ctx": LLM_CFG.get("num_ctx", 65536),
-                },
-            },
-            timeout=LLM_CFG.get("timeout", 180),
+        llm_cfg = resolve_llm_config(BASE_CFG, profile="query")
+        result = generate_text(
+            prompt,
+            llm_cfg,
+            temperature=llm_cfg.get("temperature", 0.3),
+            num_predict=llm_cfg.get("num_predict", 8192),
+            num_ctx=llm_cfg.get("num_ctx", 65536),
         )
-        resp.raise_for_status()
-        data = resp.json()
-        answer = data.get("response", "").strip()
-        done_reason = data.get("done_reason", "")
+        answer = result.text
+        done_reason = result.done_reason
         
         # Count inferred paragraphs
         inferred = 0
@@ -556,11 +551,11 @@ def generate_answer(question: str, context_files: List[dict]) -> Tuple[str, int,
         
         return answer, min(inferred, 5), done_reason, round(confidence, 2)
     
-    except requests.exceptions.ConnectionError:
-        logging.warning("Ollama nicht erreichbar (localhost:11434)")
-        return "Ollama ist nicht erreichbar. Bitte starte Ollama und versuche es erneut.", 0, "error", 0.0
+    except LLMClientError as exc:
+        logging.warning("LLM-Fehler: %s", exc)
+        return f"Fehler bei der Antwortgenerierung: {exc}", 0, "error", 0.0
     except Exception as exc:
-        logging.error("Ollama-Fehler: %s", exc)
+        logging.error("LLM-Fehler: %s", exc)
         return f"Fehler bei der Antwortgenerierung: {exc}", 0, "error", 0.0
 
 

@@ -64,8 +64,11 @@ python3 scripts/validate_skill_metadata.py SKILL.md
 
 Resolve the wiki root as CLI `--wiki-root`, then `WIKI_ROOT`, then
 `config.yaml`, then `~/knowledge`. Model/provider settings live in
-`config.yaml`; keep the current Ollama default unless the user asks to change
-providers.
+`config.yaml`: the top-level `llm:` block is the local Ollama default, and
+optional `llm_profiles:` entries can override `query`, `ingest`, `relevance`,
+`categorize`, or `retrofit` independently. Keep remote providers opt-in; use
+`api_key_env: OPENROUTER_API_KEY` or another environment-variable name, never a
+literal key in config or docs.
 
 ## Operational Notes
 
@@ -75,3 +78,5 @@ providers.
   requests fetch path over `--use-browser`.
 - Run deterministic tests before live smokes. Live URL, browser, Ollama, and
   embedding checks are optional smoke tests, not the regression oracle.
+- Standalone Python scripts cannot call the invoking agent's model directly;
+  all generation goes through `scripts/llm_client.py`.

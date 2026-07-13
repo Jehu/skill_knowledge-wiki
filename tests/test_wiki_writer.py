@@ -84,14 +84,14 @@ class WikiWriteCoordinatorTests(unittest.TestCase):
     def test_direct_script_writes_are_limited_to_allowed_paths(self):
         root = Path(__file__).resolve().parents[1]
         allowed = {
-            ("scripts/ingest_source.py", 1184),  # raw source image path finalization during ingest
-            ("scripts/ingest_source.py", 1355),  # raw source creation during ingest
+            ("scripts/ingest_source.py", 1173),  # raw source image path finalization during ingest
+            ("scripts/ingest_source.py", 1344),  # raw source creation during ingest
             ("scripts/auto_ingest.py", 1060),  # downloaded image bytes
             ("scripts/auto_ingest.py", 1319),  # process lock pid file
             ("scripts/wiki_log.py", 52),  # operational log rewrite
             ("scripts/wiki_log.py", 57),  # operational log rewrite
-            ("scripts/wiki_core.py", 256),  # staged writer helper
-            ("scripts/wiki_core.py", 347),  # coordinator callback
+            ("scripts/wiki_core.py", 352),  # staged writer helper
+            ("scripts/wiki_core.py", 443),  # coordinator callback
         }
         pattern = re.compile(r"\.write_text\(|with open\([^)]*, \"w|open\([^)]*, 'w|\.write_bytes\(")
         found = set()
