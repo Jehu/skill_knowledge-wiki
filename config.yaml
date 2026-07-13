@@ -23,6 +23,14 @@ llm:
 #   ingest:
 #     temperature: 0.1
 
+llm_profiles:
+  query:
+    provider: openrouter
+    model: openai/gpt-oss-120b
+    api_key_env: OPENROUTER_API_KEY
+    temperature: 0.3
+    num_predict: 8192
+
 # Sentence embedding configuration
 embeddings:
   model: all-MiniLM-L6-v2
